@@ -5,9 +5,9 @@
 Single file: [`radio.py`](../radio.py) · 3,155 lines · pure Python 3 standard library · zero pip
 dependencies.
 
-This document describes the codebase as it stands after the September 2026 fix pass. The pre-fix
-version is preserved verbatim as [`radio_v2.py`](../radio_v2.py); a section-by-section list of what
-changed is in [§13](#13-changelog-v2--v3).
+This document describes the codebase as it stands after the September 2026 fix pass. It is the
+reference for how termbeat works today; how it got here — the v2 → v3 changelog and what came
+before — is in [`history.md`](history.md).
 
 ---
 
@@ -25,12 +25,14 @@ changed is in [§13](#13-changelog-v2--v3).
 10. [State and physics — `update_physics`](#10-state-and-physics--update_physics)
 11. [Configuration, environment, files on disk](#11-configuration-environment-files-on-disk)
 12. [Lifecycle and signal handling](#12-lifecycle-and-signal-handling)
-13. [Changelog v2 → v3](#13-changelog-v2--v3)
-14. [Performance benchmarks](#14-performance-benchmarks)
-15. [Security considerations](#15-security-considerations)
-16. [Known limitations and non-goals](#16-known-limitations-and-non-goals)
-17. [Development: tests, benchmarks, extending](#17-development-tests-benchmarks-extending)
-18. [Code map](#18-code-map)
+13. [Performance benchmarks](#13-performance-benchmarks)
+14. [Security considerations](#14-security-considerations)
+15. [Known limitations and non-goals](#15-known-limitations-and-non-goals)
+16. [Development: tests, benchmarks, extending](#16-development-tests-benchmarks-extending)
+17. [Code map](#17-code-map)
+
+Companion documents: [`history.md`](history.md) — how the code got here ·
+[`RESULTS.md`](RESULTS.md) — the raw benchmark tables.
 
 ---
 
@@ -74,7 +76,7 @@ Both external programs are optional. Without `mpv` the UI runs silently and says
 
 Terminal-resident users who want ad-free background radio without a browser tab or an Electron app,
 and who value a single file with no install step. It measures **~6× lighter in RAM than a browser
-tab** playing the same stream (see [§14](#14-performance-benchmarks)). A large fraction of the code
+tab** playing the same stream (see [§13](#13-performance-benchmarks)). A large fraction of the code
 exists purely to make the terminal look like hi-fi equipment; it is as much a demoscene piece as a
 utility.
 
@@ -473,7 +475,7 @@ correct. `_prev_lines` is reset to `None` (forcing a full repaint) on resize and
 terminal model and asserts the incremental stream paints the identical screen to a full repaint,
 across 25 frames.
 
-Measured effect: ~9× fewer output bytes while playing, and near-silence while paused (§14). The
+Measured effect: ~9× fewer output bytes while playing, and near-silence while paused (§13). The
 larger, unmeasured win is on the *other* side of the PTY — the terminal emulator no longer parses
 and repaints an entire screen 22 times a second.
 
@@ -662,78 +664,21 @@ reaped by the kernel.)
 
 ---
 
-## 13. Changelog v2 → v3
-
-Everything below is a behavioural change to `radio.py`; `radio_v2.py` is the pre-change file.
-
-### Correctness
-
-- **IPC reader thread.** `StreamPlayer` now drains the mpv socket continuously and observes
-  properties. Fixes the write-queue saturation that pegged mpv at 100% CPU and killed all controls
-  after ~300 commands; also fixes lost/split `media-title` replies.
-- **Real stream health.** `health()` + `status_badge()` + `stream_live` gating. `BUFFERING`,
-  `STREAM ERROR`, `NO MPV` are now real UI states; the visualizer and elapsed timer go dead when
-  audio is not actually flowing, instead of fabricating a spectrum and ticking over a dead stream.
-- **`SIGHUP` handled** and **`PR_SET_PDEATHSIG`** on children — no more orphaned mpv when the
-  terminal closes or the app is killed.
-- **Multi-key input parser.** `parse_key_bytes` replaces the whole-buffer match; held keys and
-  key-repeat work; `PAGEUP`/`PAGEDOWN`/`HOME`/`END` are reachable; split escape sequences survive.
-- **`stations.json` validation** — non-`http(s)` URLs rejected, missing keys filled, no more
-  `KeyError` from a hand-edited config.
-- **Wall-clock animation** — `t_sec = time.monotonic() - t0` everywhere, replacing the ~12%-slow
-  `frame * 0.04`.
-- **Cell-accurate marquee** — `cell_slots`-based, so accented/CJK track titles no longer make the
-  ticker jitter and shrink.
-- **`lines[:rows]` clamp** in `run()`.
-- **Combining marks are width 0** (were 2).
-
-### Resources
-
-- **Damage-tracked `emit_frame`** — only changed rows are written.
-- **Adaptive frame rate** — 22 FPS active, 5 FPS idle, blocking on `select(stdin)`.
-- **Provider-scoped metadata** — tuned station every 30 s, full sweep every 10 min, backoff on
-  failure; keep-alive `HttpSession`; SomaFM per-channel endpoint (911 B vs 52,751 B).
-- **cava `SIGSTOP` while paused** — reclaims ~2% of a core.
-- **Theme colour cache** used by the renderers (was rebuilt every frame).
-- **`_measure` wide-char fast path** + small `lru_cache`.
-- **`apply_monstercat_filter`** pow lookup table.
-
-### Removed (verified dead)
-
-- Four single-row visualizer wrappers (`get_equalizer_row`, `get_oscilloscope_row`,
-  `get_braille_wave_row`, `get_tuning_glitch_row`) — each generated a whole frame to return one row;
-  zero call sites.
-- `activate_focused_button` + `focused_btn` — button-focus navigation removed earlier; the state
-  was initialised and never mutated.
-- Stereo VU meter physics (`vu_left`/`vu_right`/`vu_peak`) — the meter that consumed it was deleted
-  in v2; the physics still ran every frame.
-- `_start_mpv` — renamed `_spawn_mpv` and rewritten.
-
-### New infrastructure
-
-- File logger at `~/.local/state/termbeat/termbeat.log` (`TERMBEAT_DEBUG` for verbosity).
-- `_runtime_dir()` — per-user 0700 directory for the socket and cava config.
-- `tests/test_termbeat.py` — 16 checks. `bench/` harnesses updated.
-
-### Cost
-
-`radio.py` process RSS rose **34.7 MB → ~40.4 MB** (+5.7). Of that, ~3.0 MB is the new stdlib
-imports (`logging`, `ctypes`, `http.client`, `urllib.parse`), ~0.5 MB the compiled wide-character
-regex, the rest two extra threads and the caches. Thread count 3 → 5.
-
----
-
-## 14. Performance benchmarks
+## 13. Performance benchmarks
 
 Machine: Intel Core Ultra 7 258V (8 cores) · Linux 7.2.2 · Python 3.14.7 · `mpv` + `cava` present ·
-PipeWire. Harnesses in [`bench/`](../bench/); full tables in
-[`bench/RESULTS.md`](../bench/RESULTS.md). Whole-system numbers are with audio **muted** (so the
+PipeWire. Harnesses in [`bench/`](../bench/). Whole-system numbers are with audio **muted** (so the
 spectrum is static and the diff renderer is near its best case); the render-path table below is the
-honest playing-with-motion figure.
+honest playing-with-motion figure. [`RESULTS.md`](RESULTS.md) has the full per-geometry tables and
+the profile behind the v2 column.
 
-### 14.1 Whole system, 101×54, real mpv + cava
+The v2 columns are the state before the September 2026 fix pass, kept because they are the evidence
+for why the code looks the way it does; the changes themselves are listed in
+[`history.md`](history.md).
 
-| Metric | v2 (`radio_v2.py`) | v3 (`radio.py`) |
+### 13.1 Whole system, 101×54, real mpv + cava
+
+| Metric | v2 (pre-fix) | v3 (current) |
 | :-- | --: | --: |
 | `radio.py` RSS | 34.7 MB | 40.4 MB |
 | `mpv` RSS | 85.2 MB | 85.2 MB |
@@ -746,7 +691,7 @@ honest playing-with-motion figure.
 | PTY output, paused | 563 KB/s | **0.1 KB/s** |
 | Threads (`radio.py`) | 3 | 5 |
 
-### 14.2 mpv IPC saturation — 583 volume keypresses over 70 s
+### 13.2 mpv IPC saturation — 583 volume keypresses over 70 s
 
 | | v2 | v3 |
 | :-- | --: | --: |
@@ -754,7 +699,7 @@ honest playing-with-motion figure.
 | `mpv` CPU after | **100.5 %** | **3.2 %** |
 | `Space` (pause) after | ignored — mpv still 100.8 % | **works — mpv → 0.3 %** |
 
-### 14.3 Metadata traffic (tuned to a SomaFM station)
+### 13.3 Metadata traffic (tuned to a SomaFM station)
 
 | | v2 | v3 |
 | :-- | --: | --: |
@@ -763,7 +708,7 @@ honest playing-with-motion figure.
 | HTTPS requests / hour | 1,200 | **144** |
 | SomaFM now-playing fetch | 52,751 B / 12 s | 911 B / 30 s |
 
-### 14.4 Render path (isolated; simulated spectrum in motion)
+### 13.4 Render path (isolated; simulated spectrum in motion)
 
 Unchanged by design — the renderer was never the bottleneck.
 
@@ -780,7 +725,7 @@ Output bytes per frame at 101×54, Retro/Spectrum, in motion: full repaint **602
 `_measure` micro-benchmark (v2 → v3): 1.19× (80×24) to 1.58× (Modern Neo Braille 101×54) faster on
 the measure path; whole-frame effect is small because measurement is no longer dominant.
 
-### 14.5 Context
+### 13.5 Context
 
 | App | Stack | RSS | Idle CPU |
 | :-- | :-- | --: | --: |
@@ -789,11 +734,11 @@ the measure path; whole-frame effect is small because measurement is no longer d
 | Browser tab (SomaFM) | Chromium | 500 MB – 1.2 GB | 4–12 % |
 | Spotify desktop | Electron | 450–800 MB | 3–8 % |
 
-`mpv` is ~61% of termbeat's memory and is not `radio.py`'s code. See the Rust rewrite plan for the
-argument that removing the two subprocesses — not rewriting the renderer — is where a large footprint
-reduction lives.
+`mpv` is ~61% of termbeat's memory and is not `radio.py`'s code. See
+[`../rs/rust-rewrite-plan.md`](../rs/rust-rewrite-plan.md) for the argument that removing the two
+subprocesses — not rewriting the renderer — is where a large footprint reduction lives.
 
-### 14.6 Test suite
+### 13.6 Test suite
 
 `python3 tests/test_termbeat.py` — **16 checks, all passing**: width parity vs the legacy algorithm,
 multi-key parsing, split-escape survival, config validation, cell-exact marquee for CJK titles,
@@ -803,7 +748,7 @@ dead-stream behaviour (error badge, collapsed visualizer, frozen timer).
 
 ---
 
-## 15. Security considerations
+## 14. Security considerations
 
 - **IPC socket** is in `$XDG_RUNTIME_DIR/termbeat/` (mode 0700, per-user), not world-readable `/tmp`
   with a PID-guessable name.
@@ -821,7 +766,7 @@ dead-stream behaviour (error badge, collapsed visualizer, frozen timer).
 
 ---
 
-## 16. Known limitations and non-goals
+## 15. Known limitations and non-goals
 
 - **`ETag` revalidation is inert today** — none of the four metadata APIs send `ETag`. The code path
   is correct and free; it will start saving bytes if any of them adds one. Keep-alive is the actual
@@ -829,17 +774,19 @@ dead-stream behaviour (error badge, collapsed visualizer, frozen timer).
 - **Single file, single class.** `TermbeatPlayer` is ~1,700 lines and owns state, input, physics,
   four renderers, and lifecycle. The four renderers still share ~70% of their structure by
   convention, not by a common layout engine. This was left deliberately untouched by the fix pass to
-  keep the diff reviewable; splitting into a package is a separate task.
+  keep the diff reviewable; splitting into a package is a separate task — see
+[`../rs/improvement-ideas.md`](../rs/improvement-ideas.md).
 - **No Windows audio path.** `termios`/`tty` absence is handled (UI renders, input disabled), but
   `mpv` IPC over `AF_UNIX` and `SIGSTOP`/`prctl` are POSIX. A Windows port would need a named pipe
   and a different child-reaping strategy.
 - **Not a general music player** — no local files, no playlists beyond the station list, no seek
   (streams are live).
-- **RSS regression** (+5.7 MB) is accepted in exchange for logging, child reaping, and the IPC fix.
+- **RSS regression** (+5.7 MB against the pre-fix version) is accepted in exchange for logging,
+  child reaping, and the IPC fix — see [`history.md` §3](history.md#3-what-the-fix-pass-cost).
 
 ---
 
-## 17. Development: tests, benchmarks, extending
+## 16. Development: tests, benchmarks, extending
 
 ```sh
 python3 tests/test_termbeat.py          # 16 checks, ~5 s, no network, no subprocesses
@@ -876,9 +823,23 @@ Add a `render_<name>` method, extend `design_names`, and add a branch to `render
 (`radio.py:2478`). It must return a `list[str]` of rows each exactly `cols` cells wide (use
 `fit_row`); `run()` clamps to `rows` and `emit_frame` handles the rest.
 
+### Prototyping before you wire anything in
+
+[`designs/`](../designs/) and [`gui/`](../gui/) hold standalone sketches that run against synthetic
+audio and a fake player, so a visualizer or an interface idea can be seen before it touches
+`radio.py`:
+
+```sh
+python3 designs/gallery.py    # every visualizer sketch
+python3 gui/gallery.py        # launcher menu for the interface mock-ups
+```
+
+The idea each one comes from is catalogued in [`designs/README.md`](../designs/README.md) and
+[`gui/README.md`](../gui/README.md); the backlogs themselves are in [`../rs/`](../rs/).
+
 ---
 
-## 18. Code map
+## 17. Code map
 
 | Lines | Symbol | Role |
 | --: | :-- | :-- |
@@ -905,5 +866,6 @@ Add a `render_<name>` method, extend `design_names`, and add a branch to `render
 
 ---
 
-*Generated as part of the September 2026 fix pass. Companion document:
-`docs/rust-rewrite-plan.md`.*
+*Written as part of the September 2026 fix pass, and kept current with `radio.py`. Companions:
+[`history.md`](history.md) · [`RESULTS.md`](RESULTS.md) ·
+[`../rs/rust-rewrite-plan.md`](../rs/rust-rewrite-plan.md).*

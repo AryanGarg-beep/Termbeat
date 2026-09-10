@@ -1,10 +1,17 @@
 # termbeat — measured resource benchmarks
 
 **Machine:** Intel Core Ultra 7 258V (8 cores) · Linux 7.2.2 · Python 3.14.7 · mpv + cava present · PipeWire
-**Date:** 2026-09-08 · **Harnesses:** `bench/benchmark_render.py`, `bench/benchmark_system.py`
+**Date:** 2026-09-08 · **Harnesses:** [`bench/benchmark_render.py`](../bench/benchmark_render.py),
+[`bench/benchmark_system.py`](../bench/benchmark_system.py)
 
-Re-measured from scratch. The numbers in `resource_footprint_and_optimization_study_plan.md` are
-superseded — several were wrong by large factors (noted inline).
+Re-measured from scratch. These numbers describe termbeat **before** the September 2026 fix pass —
+they are what the pass was aimed at, and the issues called out below ("the fix was never applied",
+"cleanup leaks", "cava never stops") were subsequently fixed. For the current figures see
+[`termbeat.md` §13](termbeat.md#13-performance-benchmarks); for what changed,
+[`history.md`](history.md).
+
+An earlier footprint study, written before the repository existed and not carried into it, is
+superseded by this one — several of its numbers were wrong by large factors (noted inline).
 
 ---
 
