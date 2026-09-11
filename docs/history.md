@@ -12,6 +12,7 @@ the source has somewhere to be explained.
 2. [The September 2026 fix pass](#2-the-september-2026-fix-pass)
 3. [What the fix pass cost](#3-what-the-fix-pass-cost)
 4. [Documents that predate the repository](#4-documents-that-predate-the-repository)
+5. [After the fix pass: TIDE](#5-after-the-fix-pass-tide)
 
 ---
 
@@ -25,6 +26,8 @@ the source has somewhere to be explained.
 | 2026-09-08 → 09 | **The fix pass — v3.** §2 below. Driven by what the re-measurement actually found: the renderer was never the problem, the subprocesses and the IPC path were. |
 | 2026-09-09 | **`git init`.** Until this point the only version control was hand-copied backup files in a scratch directory. Those backups are not in the repository — the changelog in §2 is what they were kept for. |
 | 2026-09-09 | Repository assembled: `radio.py` plus `docs/`, `designs/`, `gui/`, `bench/`, `tests/`, and the forward-looking plans in `rs/`. |
+| 2026-09-10 | **TIDE**, a fifth design style, plus four colour themes, a drawer sized to its panel, and cheaper tuning static. §5 below. |
+| 2026-09-11 | **Add-station form** on `A`, and a hint bar that is never cut short. §5 below. |
 
 ## 2. The September 2026 fix pass
 
@@ -124,3 +127,79 @@ because a few describe work that is still visible in the code:
 Anything worth keeping from them has been folded into
 [`termbeat.md`](termbeat.md), [`RESULTS.md`](RESULTS.md), or this file. New work is written up in
 `docs/` from here on rather than as loose plan files.
+
+## 5. After the fix pass: TIDE
+
+Changes to `radio.py` after the repository was assembled. How TIDE works is in
+[`termbeat.md` §9.7](termbeat.md#97-the-tide-renderer).
+
+### Added
+
+- **TIDE**, a fifth design style (`D`). The station name is drawn as large 5×7 bitmap type on a
+  half-pixel raster, each letter flooding with its slice of the spectrum over a gradient fixed in
+  frame space. New module-level primitives: `FONT_5X7`, `Pix`, `draw_word`. It reuses
+  `band_heights`/`peak_heights`, the transport bar, the status badge, the drawer and the tuning
+  glitch. No physics, threads or dependencies were added, and `emit_frame` is unchanged.
+- **Four colour themes**: Blue Hour, Ultraviolet, Ember, Deep Field. The original five are unchanged.
+- **Add-station form** on `A`: name, stream URL, freq, genre, bitrate and provider, validated as you
+  type. `Enter` appends the station to `stations.json` and tunes to it. The file is only ever
+  appended to, and a file that doesn't parse is never overwritten. This is backlog idea 7.2, built
+  from the `gui/station_editor.py` mock-up without its `Ctrl-S` save, which the terminal's XON/XOFF
+  flow control would swallow.
+
+### Changed
+
+- **The drawer fills its panel.** `render_drawer_rows` takes a `max_rows` from each caller instead
+  of always showing 7 stations. Tall panels were mostly empty, and in panels shorter than 8 rows
+  (Minimal Zen at 70×18, the Deck-78 LCD) the selection could scroll out of view. `PageUp`/`PageDown`
+  now step by the page actually shown.
+- **Tuning static is 2.3× cheaper to generate.** `get_tuning_glitch_rows` calls `random.choices`
+  once per row instead of `random.choice` once per cell. The noise looks the same.
+- **The hint bar is never cut short.** `render_status_bar` picks the fullest of five wordings that
+  fits, and every chassis style now shows `[A] Add`. It had been truncated at some sizes: Modern Neo
+  at 70 columns, and the standard deck's own bar, which lost `[M] Mute` and `[Q] Quit`.
+- **Pastes survive in the form.** The 32-keys-per-frame input cap is lifted while the form is open,
+  so a pasted URL arrives whole.
+
+### Decisions worth recording
+
+- **TIDE binds bands by horizontal position, not reading order.** The design brief assumed the
+  readable signal in real cava output would be a spectral tilt, and asked for low bands under the
+  first letters. Seen next to the Retro visualizer on a live station, the real signal was a centre
+  hump, and reading order folded it at a line break: the peaks landed at the end of one line and the
+  start of the next. Position-based binding puts the middle of the spectrum in the middle of the
+  screen on every line.
+- **`TIDE_EXPAND` is 1.25, not 1.8.** The stretch that separates correlated bands clipped the quiet
+  ends to dark and pegged the loud middle full at 1.8.
+- **`Pix` and `draw_word` are module-level**, next to `fit_row`. The brief placed them in the
+  `get_*_rows` block, but that block is inside `TermbeatPlayer`.
+- **`draw_word` calls its colour function per pixel**, as the brief specified. That callback is
+  most of TIDE's render time (up to 1.4 ms/frame at 200×60). Calling it once per font-pixel row
+  instead would cut the calls 2–6× but break the contract, so it was left.
+
+### Tests and benchmark
+
+- **`tests/test_termbeat.py`: 16 → 29 checks.** The layout check loops over all five styles. New
+  checks cover:
+  - TIDE's exact frame size in every theme, size, station and state
+  - TIDE's bands in horizontal order, all 18 on screen
+  - the name staying drawn but unflooded in silence
+  - near-silence while paused
+  - the drawer keeping its selection on screen in every style
+  - `[A] Add` in an uncut hint bar in every chassis style
+  - the add-station form (7 checks), run against a temporary config directory
+
+  Each new check was confirmed to fail against the bug it guards.
+- **Fixed a flaky existing check.** "Paused steady state is nearly silent" waited a fixed 40 frames
+  after pausing, but a peak-hold cap can take 55 to fall. Whenever the random spectrum paused on a
+  tall peak, the cap was still moving during the measured window, and the check failed (1 run in 15
+  here). It now waits until the bars and caps are down.
+- **`bench/benchmark_render.py` includes TIDE**, one row per size because it ignores `V`. At
+  200×60 it is the benchmark's worst config: 1.40 ms, 3.0% of one core.
+
+### Still open
+
+- Retro Hi-Fi's Studio Tower layout never draws the drawer, so `L` there opens an invisible one
+  ([`termbeat.md` §15](termbeat.md#15-known-limitations-and-non-goals)).
+- The add-station form only adds. Editing or removing a station still means editing
+  `stations.json` by hand.

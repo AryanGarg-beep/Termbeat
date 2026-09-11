@@ -21,6 +21,7 @@ import ctypes
 import errno
 import functools
 import http.client
+import itertools
 import json
 import logging
 import math
@@ -300,6 +301,11 @@ STATION_DEFAULTS = {
 
 _TEXT_KEYS = ("id", "station", "freq", "bitrate", "genre", "signal", "track", "provider")
 
+# The [A] add-station form: its fields in order, and the providers the last one
+# cycles through. "auto" leaves provider out and lets provider_of infer it.
+EDITOR_FIELDS = ("name", "url", "freq", "genre", "bitrate", "provider")
+EDITOR_PROVIDERS = ("auto", "somafm", "plaza", "radioparadise", "kexp", "generic")
+
 
 def normalize_station(raw):
     """Validate and complete one station entry; None if unusable.
@@ -418,6 +424,58 @@ THEMES = [
         "accent": (255, 165, 45),
         "warn": (255, 220, 50),
     },
+    {
+        "name": "Blue Hour",
+        "frame": (44, 84, 99),
+        "title_bg": (0, 46, 58),
+        "title_fg": (232, 240, 248),
+        "deck_bg": (13, 28, 33),
+        "lcd_bg": (0, 16, 21),
+        "lcd_border": (32, 66, 78),
+        "lcd_dim": (58, 107, 125),
+        "lcd_bright": (255, 236, 24),
+        "accent": (0, 205, 255),
+        "warn": (255, 125, 172),
+    },
+    {
+        "name": "Ultraviolet",
+        "frame": (98, 72, 98),
+        "title_bg": (52, 29, 59),
+        "title_fg": (232, 240, 248),
+        "deck_bg": (30, 19, 34),
+        "lcd_bg": (18, 7, 22),
+        "lcd_border": (76, 54, 78),
+        "lcd_dim": (124, 93, 123),
+        "lcd_bright": (255, 187, 21),
+        "accent": (231, 146, 255),
+        "warn": (0, 225, 240),
+    },
+    {
+        "name": "Ember",
+        "frame": (92, 74, 44),
+        "title_bg": (58, 33, 0),
+        "title_fg": (232, 240, 248),
+        "deck_bg": (33, 21, 13),
+        "lcd_bg": (21, 9, 0),
+        "lcd_border": (73, 57, 32),
+        "lcd_dim": (116, 96, 58),
+        "lcd_bright": (0, 255, 255),
+        "accent": (255, 162, 0),
+        "warn": (252, 139, 255),
+    },
+    {
+        "name": "Deep Field",
+        "frame": (62, 77, 107),
+        "title_bg": (17, 40, 63),
+        "title_fg": (232, 240, 248),
+        "deck_bg": (16, 24, 38),
+        "lcd_bg": (3, 12, 27),
+        "lcd_border": (46, 60, 86),
+        "lcd_dim": (82, 99, 134),
+        "lcd_bright": (194, 226, 47),
+        "accent": (93, 186, 255),
+        "warn": (255, 127, 135),
+    },
 ]
 
 
@@ -470,6 +528,61 @@ TIMER_BLINK_PERIOD = 1.1
 # Guaranteed single-cell block characters
 BLOCKS = [" ", " ", "▂", "▃", "▄", "▅", "▆", "▇", "█"]
 STATIC_CHARS = "░▒▓#%*~+-=<>[]/\\$"
+
+# 5x7 bitmap type for the TIDE design: seven pipe-delimited rows of five pixels,
+# '#' lit. The period is there because "KEXP 90.3 Seattle" needs it.
+FONT_5X7 = {
+    "A": ".###.|#...#|#...#|#####|#...#|#...#|#...#",
+    "B": "####.|#...#|#...#|####.|#...#|#...#|####.",
+    "C": ".###.|#...#|#....|#....|#....|#...#|.###.",
+    "D": "####.|#...#|#...#|#...#|#...#|#...#|####.",
+    "E": "#####|#....|#....|####.|#....|#....|#####",
+    "F": "#####|#....|#....|####.|#....|#....|#....",
+    "G": ".###.|#...#|#....|#.###|#...#|#...#|.####",
+    "H": "#...#|#...#|#...#|#####|#...#|#...#|#...#",
+    "I": ".###.|..#..|..#..|..#..|..#..|..#..|.###.",
+    "J": "..###|...#.|...#.|...#.|...#.|#..#.|.##..",
+    "K": "#...#|#..#.|#.#..|##...|#.#..|#..#.|#...#",
+    "L": "#....|#....|#....|#....|#....|#....|#####",
+    "M": "#...#|##.##|#.#.#|#.#.#|#...#|#...#|#...#",
+    "N": "#...#|#...#|##..#|#.#.#|#..##|#...#|#...#",
+    "O": ".###.|#...#|#...#|#...#|#...#|#...#|.###.",
+    "P": "####.|#...#|#...#|####.|#....|#....|#....",
+    "Q": ".###.|#...#|#...#|#...#|#.#.#|#..#.|.##.#",
+    "R": "####.|#...#|#...#|####.|#.#..|#..#.|#...#",
+    "S": ".####|#....|#....|.###.|....#|....#|####.",
+    "T": "#####|..#..|..#..|..#..|..#..|..#..|..#..",
+    "U": "#...#|#...#|#...#|#...#|#...#|#...#|.###.",
+    "V": "#...#|#...#|#...#|#...#|#...#|.#.#.|..#..",
+    "W": "#...#|#...#|#...#|#.#.#|#.#.#|#.#.#|.#.#.",
+    "X": "#...#|#...#|.#.#.|..#..|.#.#.|#...#|#...#",
+    "Y": "#...#|#...#|.#.#.|..#..|..#..|..#..|..#..",
+    "Z": "#####|....#|...#.|..#..|.#...|#....|#####",
+    "0": ".###.|#...#|#..##|#.#.#|##..#|#...#|.###.",
+    "1": "..#..|.##..|..#..|..#..|..#..|..#..|.###.",
+    "2": ".###.|#...#|....#|...#.|..#..|.#...|#####",
+    "3": "####.|....#|....#|.###.|....#|....#|####.",
+    "4": "...#.|..##.|.#.#.|#..#.|#####|...#.|...#.",
+    "5": "#####|#....|####.|....#|....#|#...#|.###.",
+    "6": "..##.|.#...|#....|####.|#...#|#...#|.###.",
+    "7": "#####|....#|...#.|..#..|.#...|.#...|.#...",
+    "8": ".###.|#...#|#...#|.###.|#...#|#...#|.###.",
+    "9": ".###.|#...#|#...#|.####|....#|...#.|.##..",
+    " ": ".....|.....|.....|.....|.....|.....|.....",
+    "-": ".....|.....|.....|#####|.....|.....|.....",
+    "'": "..#..|..#..|.#...|.....|.....|.....|.....",
+    ".": ".....|.....|.....|.....|.....|.##..|.##..",
+}
+# The lit (x, y) cells of each glyph, parsed once so drawing never re-splits.
+_FONT_BITS = {
+    ch: tuple((sx, sy) for sy, row in enumerate(g.split("|"))
+              for sx, c in enumerate(row) if c == "#")
+    for ch, g in FONT_5X7.items()
+}
+# How far TIDE stretches each letter away from the spectrum's mean level. Real
+# cava bands move together, so a mild stretch keeps neighbouring letters apart;
+# much more than this clips the quiet ends dark and pegs the loud middle full.
+TIDE_EXPAND = 1.25
 
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
 
@@ -585,6 +698,98 @@ def fit_row(content: str, target_width: int, bg_color: str = "", fill_char: str 
     if vis_w < target_width:
         return f"{content}{bg_color}{fill_char * (target_width - vis_w)}{RST}"
     return content
+
+
+# --- TIDE type raster --------------------------------------------------------
+# A half-pixel canvas: one cell is 1 px wide and 2 px tall, painted as U+2580
+# with the top pixel as foreground and the bottom pixel as background.
+
+HALF_BLOCK = "▀"
+
+# SGR strings keyed by RGB. A TIDE frame only uses one gradient sample per pixel
+# row plus a few fixed roles, and each gradient is a line between two theme
+# colours, so these stay a few hundred entries however long the session runs.
+_FG_SGR = {}
+_BG_SGR = {}
+
+
+def _lerp3(a: tuple, b: tuple, t: float) -> tuple:
+    return (int(a[0] + (b[0] - a[0]) * t + 0.5),
+            int(a[1] + (b[1] - a[1]) * t + 0.5),
+            int(a[2] + (b[2] - a[2]) * t + 0.5))
+
+
+class Pix:
+    """Half-pixel raster buffer of RGB tuples, pre-filled with the ground."""
+    __slots__ = ("w", "h", "buf")
+
+    def __init__(self, w: int, h: int, ground: tuple):
+        self.w = w
+        self.h = h + (h & 1)                 # whole cells only
+        self.buf = [ground] * (w * self.h)
+
+    def set(self, x: int, y: int, rgb: tuple):
+        if 0 <= x < self.w and 0 <= y < self.h:
+            self.buf[y * self.w + x] = rgb
+
+    def to_rows(self) -> list:
+        """One string per pair of pixel rows, exactly w cells each.
+
+        Runs of cells with the same (fg, bg) share one escape, and only the half
+        that changed is re-sent, so a flat stretch of ground or flood costs one
+        sequence rather than one per cell.
+        """
+        w, buf = self.w, self.buf
+        fg_c, bg_c = _FG_SGR, _BG_SGR
+        rows = []
+        for top in range(0, len(buf), 2 * w):
+            parts = []
+            cur_f = cur_b = None
+            for (f, b), run in itertools.groupby(zip(buf[top:top + w], buf[top + w:top + 2 * w])):
+                if f != cur_f:
+                    s = fg_c.get(f)
+                    if s is None:
+                        s = fg_c[f] = fg(*f)
+                    parts.append(s)
+                    cur_f = f
+                if b != cur_b:
+                    s = bg_c.get(b)
+                    if s is None:
+                        s = bg_c[b] = bg(*b)
+                    parts.append(s)
+                    cur_b = b
+                parts.append(HALF_BLOCK * len(list(run)))
+            parts.append(RST)
+            rows.append("".join(parts))
+        return rows
+
+
+def draw_word(pix: Pix, x: int, y: int, text: str, scale: int, gap: int, colour_fn) -> int:
+    """Stamp text into pix in FONT_5X7 with its top-left at (x, y).
+
+    Each font pixel becomes a scale x scale block, with gap px between glyphs.
+    colour_fn(px, py, letter_index) colours every lit pixel (None leaves the
+    ground); letter_index counts the non-space glyphs of text from 0. Glyphs
+    that would fall outside pix are skipped. Returns the number of letters.
+    """
+    buf, w, h = pix.buf, pix.w, pix.h
+    gh = 7 * scale
+    li = 0
+    for ch in text:
+        bits = _FONT_BITS.get(ch)
+        if ch != " " and bits is not None:
+            if 0 <= x and x + 5 * scale <= w and 0 <= y and y + gh <= h:
+                for sx, sy in bits:
+                    x0 = x + sx * scale
+                    for py in range(y + sy * scale, y + sy * scale + scale):
+                        base = py * w
+                        for px in range(x0, x0 + scale):
+                            rgb = colour_fn(px, py, li)
+                            if rgb is not None:
+                                buf[base + px] = rgb
+            li += 1
+        x += 5 * scale + gap
+    return li
 
 
 # Escape sequences keyed by the exact bytes a terminal sends.
@@ -714,8 +919,9 @@ class RawInput:
             time.sleep(timeout)
             return False
 
-    def get_keys(self):
-        """Every key pressed since the last call, in order."""
+    def get_keys(self, limit=MAX_KEYS_PER_FRAME):
+        """Every key pressed since the last call, in order, at most limit of
+        them. limit=None keeps them all, which a pasted URL needs."""
         if not HAS_TERMIOS or not sys.stdin.isatty() or not hasattr(self, "fd"):
             return []
         data = self._pending
@@ -751,9 +957,9 @@ class RawInput:
                 self._esc_at = None
         else:
             self._esc_at = None
-        if len(keys) > MAX_KEYS_PER_FRAME:
-            LOG.debug("dropping %d excess keys this frame", len(keys) - MAX_KEYS_PER_FRAME)
-            keys = keys[:MAX_KEYS_PER_FRAME]
+        if limit is not None and len(keys) > limit:
+            LOG.debug("dropping %d excess keys this frame", len(keys) - limit)
+            keys = keys[:limit]
         return keys
 
 
@@ -1492,6 +1698,8 @@ class TermbeatPlayer:
         self.show_drawer = False
         self.drawer_selected_idx = 0
         self.drawer_scroll_offset = 0
+        self.drawer_page = 7          # stations the drawer showed last frame
+        self.editor = None            # the [A] add-station form's state while it is open
         self.config_mtime = 0.0
         self.physics_tick = 0
 
@@ -1526,9 +1734,11 @@ class TermbeatPlayer:
         self.last_rows = 0
         self.needs_clear = False
 
-        # 4 Design Aesthetics (Toggle on the fly with [D])
+        # 5 Design Aesthetics (Toggle on the fly with [D])
         self.design_style = 0
-        self.design_names = ["RETRO HI-FI", "MODERN NEO", "MINIMAL ZEN", "CYBERPUNK"]
+        self.design_names = ["RETRO HI-FI", "MODERN NEO", "MINIMAL ZEN", "CYBERPUNK", "TIDE"]
+        # TIDE's last layout, gradient sheet and type rows, each with its key
+        self._tide_cache = {}
 
         # Stream audio engine & live metadata
         self.stream_player = StreamPlayer()
@@ -1663,13 +1873,15 @@ class TermbeatPlayer:
     def cycle_theme(self):
         self.theme_idx = (self.theme_idx + 1) % len(THEMES)
 
-    def check_reload_stations(self):
-        """Hot-reload the station list if the config file changed on disk."""
+    def check_reload_stations(self, force: bool = False):
+        """Reload the station list if the config file changed on disk. force
+        skips the mtime comparison, for right after the editor has written it:
+        a coarse filesystem clock could otherwise hide that write."""
         if not os.path.exists(CONFIG_FILE):
             return
         try:
             mtime = os.path.getmtime(CONFIG_FILE)
-            if mtime <= self.config_mtime:
+            if mtime <= self.config_mtime and not force:
                 return
             self.config_mtime = mtime
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
@@ -1692,8 +1904,135 @@ class TermbeatPlayer:
         if self.show_drawer:
             self.check_reload_stations()
             self.drawer_selected_idx = self.current_track_idx
-            # Center selected item in 7-slot scroll window
-            self.drawer_scroll_offset = max(0, min(len(PLAYLIST) - 7, self.drawer_selected_idx - 3))
+            # Center the selected item in the scroll window
+            page = self.drawer_page
+            self.drawer_scroll_offset = max(0, min(len(PLAYLIST) - page, self.drawer_selected_idx - page // 2))
+
+    def open_station_editor(self):
+        """[A]: a blank add-station form. While it is open it owns the keyboard."""
+        self.show_drawer = False
+        self.editor = {"fields": {f: "" for f in EDITOR_FIELDS if f != "provider"},
+                       "provider": "auto", "field": 0, "error": ""}
+
+    def _editor_key(self, key: str) -> bool:
+        """Every key while the form is open, so q, n, d and digits type rather
+        than quit, tune or restyle. Enter saves; Ctrl-S is not used because the
+        terminal keeps it for XON/XOFF flow control and it would freeze output."""
+        ed = self.editor
+        field = EDITOR_FIELDS[ed["field"]]
+        if key == "QUIT":
+            return False
+        if key == "ESC":
+            self.editor = None
+        elif key in ("TAB", "DOWN"):
+            ed["field"] = (ed["field"] + 1) % len(EDITOR_FIELDS)
+        elif key in ("BACKTAB", "UP"):
+            ed["field"] = (ed["field"] - 1) % len(EDITOR_FIELDS)
+        elif key in ("LEFT", "RIGHT"):
+            if field == "provider":
+                step = 1 if key == "RIGHT" else -1
+                i = EDITOR_PROVIDERS.index(ed["provider"])
+                ed["provider"] = EDITOR_PROVIDERS[(i + step) % len(EDITOR_PROVIDERS)]
+        elif key == "ENTER":
+            ed["error"] = self._editor_problem() or self._save_new_station() or ""
+        elif field != "provider":
+            value = ed["fields"][field]
+            if key in ("BACKSPACE", "\x08"):
+                value = value[:-1]
+            elif key == "\x15":                          # Ctrl-U
+                value = ""
+            elif key == "SPACE":
+                value += " "
+            elif len(key) == 1 and key.isprintable():
+                value += key
+            ed["fields"][field] = value[:256]
+            ed["error"] = ""
+        return True
+
+    def _editor_problem(self):
+        """Why the form can't be saved yet, or None. The URL rule is the one
+        normalize_station applies when stations.json is loaded."""
+        f = self.editor["fields"]
+        url = f["url"].strip()
+        if not f["name"].strip():
+            return "name is required"
+        parts = urllib.parse.urlsplit(url)
+        if parts.scheme.lower() not in ("http", "https") or not parts.netloc:
+            return "url must start with http:// or https://"
+        for stn in PLAYLIST:
+            if stn["url"] == url:
+                return f"already saved as {stn['station']}"
+        return None
+
+    def _editor_entry(self) -> dict:
+        """The stations.json entry the form describes: only what was filled in,
+        plus an id."""
+        f = self.editor["fields"]
+        entry = {"station": f["name"].strip(), "url": f["url"].strip()}
+        for key in ("freq", "genre", "bitrate"):
+            if f[key].strip():
+                entry[key] = f[key].strip()
+        if self.editor["provider"] != "auto":
+            entry["provider"] = self.editor["provider"]
+        if MetadataScraper.provider_of(entry) == "somafm":
+            # SomaFM's now-playing feed is looked up by channel id, the first
+            # part of the stream path: /groovesalad-128-mp3 -> groovesalad.
+            path = urllib.parse.urlsplit(entry["url"]).path.strip("/")
+            entry["id"] = path.split("/")[-1].split("-")[0].split(".")[0]
+        else:
+            slug = re.sub(r"[^a-z0-9]+", "-", entry["station"].lower()).strip("-") or "station"
+            taken = {s.get("id") for s in PLAYLIST}
+            sid, n = slug, 2
+            while sid in taken:
+                sid, n = f"{slug}-{n}", n + 1
+            entry["id"] = sid
+        return entry
+
+    def _save_new_station(self):
+        """Append the form to stations.json, reload, and tune to the new station.
+        Returns an error message, or None once saved (the form then closes).
+
+        Append-only: the existing entries are read back as they are on disk and
+        written out unchanged, and a file that doesn't parse is never replaced -
+        it may be one the user is half-way through editing by hand.
+        """
+        entry = self._editor_entry()
+        try:
+            if os.path.exists(CONFIG_FILE):
+                with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                    raw = json.load(f)
+                if not isinstance(raw, list):
+                    raise ValueError("not a list")
+            else:
+                raw = [dict(s) for s in DEFAULT_PLAYLIST]
+        except (ValueError, OSError):
+            return "stations.json isn't a valid list - fix it first"
+        raw.append(entry)
+        try:
+            os.makedirs(CONFIG_DIR, exist_ok=True)
+            fd, tmp = tempfile.mkstemp(dir=CONFIG_DIR, prefix=".stations.", suffix=".json")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    json.dump(raw, f, indent=2, ensure_ascii=False)
+                    f.write("\n")
+                if os.path.exists(CONFIG_FILE):
+                    shutil.copymode(CONFIG_FILE, tmp)
+                os.replace(tmp, CONFIG_FILE)
+            except BaseException:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+                raise
+        except OSError as exc:
+            return f"could not write stations.json: {exc.strerror or exc}"
+        LOG.info("added station %r to %s", entry["station"], CONFIG_FILE)
+        self.check_reload_stations(force=True)
+        self.editor = None
+        idx = next((i for i, s in enumerate(PLAYLIST) if s["url"] == entry["url"]), None)
+        if idx is not None:
+            self._tune(idx)
+        return None
 
     def toggle_play(self):
         self.flash_button(2)
@@ -2113,8 +2452,8 @@ class TermbeatPlayer:
                 centered_lock = lock_msg.center(target_w)
                 rows.append(fit_row(f"{c_accent}\033[1m{centered_lock}\033[22m{RST}", target_w))
             else:
-                glitch_chars = [random.choice(STATIC_CHARS) for _ in range(target_w)]
-                row_str = f"{c_dim}{''.join(glitch_chars)}{RST}"
+                # one call per row, not per cell: 2.3x faster, same uniform noise
+                row_str = f"{c_dim}{''.join(random.choices(STATIC_CHARS, k=target_w))}{RST}"
                 rows.append(fit_row(row_str, target_w))
 
         return rows
@@ -2228,32 +2567,27 @@ class TermbeatPlayer:
         c_hint_key = t_cfg["_c_accent"]
         c_hint_txt = C_HINT_TEXT
 
-        if inner_w >= 90:
-            txt = (
-                f"{c_hint_key}[D]{c_hint_txt} Style ({style_label})   "
-                f"{c_hint_key}[V]{c_hint_txt} Viz   "
-                f"{c_hint_key}[T]{c_hint_txt} Theme   "
-                f"{c_hint_key}[L]{c_hint_txt} Stations   "
-                f"{c_hint_key}[+/-]{c_hint_txt} Vol   "
-                f"{c_hint_key}[Q]{c_hint_txt} Quit"
-            )
-        elif inner_w >= 66:
-            txt = (
-                f"{c_hint_key}[D]{c_hint_txt} Style   "
-                f"{c_hint_key}[V]{c_hint_txt} Viz   "
-                f"{c_hint_key}[T]{c_hint_txt} Theme   "
-                f"{c_hint_key}[L]{c_hint_txt} List   "
-                f"{c_hint_key}[+/-]{c_hint_txt} Vol   "
-                f"{c_hint_key}[Q]{c_hint_txt} Quit"
-            )
-        else:
-            txt = (
-                f"{c_hint_key}[D]{c_hint_txt}Style  "
-                f"{c_hint_key}[V]{c_hint_txt}Viz  "
-                f"{c_hint_key}[T]{c_hint_txt}Thm  "
-                f"{c_hint_key}[L]{c_hint_txt}Stn  "
-                f"{c_hint_key}[Q]{c_hint_txt}Quit"
-            )
+        # Fullest wording first; take the first that fits, so the bar is never
+        # cut short. Fixed width thresholds used to truncate it at some sizes
+        # (Modern Neo at 70 columns ended "[Q] Qui").
+        style = f" Style ({style_label})" if style_label else " Style"
+        full = [("[D]", style), ("[V]", " Viz"), ("[T]", " Theme"), ("[L]", " Stations"),
+                ("[A]", " Add"), ("[+/-]", " Vol"), ("[Q]", " Quit")]
+        variants = (
+            (full, "   "),
+            (full, "  "),
+            ([("[D]", " Style"), ("[V]", " Viz"), ("[T]", " Theme"), ("[L]", " List"),
+              ("[A]", " Add"), ("[+/-]", " Vol"), ("[Q]", " Quit")], "  "),
+            ([("[D]", "Style"), ("[V]", "Viz"), ("[T]", "Theme"), ("[L]", "List"),
+              ("[A]", "Add"), ("[+/-]", "Vol"), ("[Q]", "Quit")], "  "),
+            ([("[D]", "Style"), ("[V]", "Viz"), ("[T]", "Thm"), ("[L]", "Stn"),
+              ("[A]", "Add"), ("[Q]", "Quit")], "  "),
+        )
+        room = inner_w - (3 if mode == "bracket" else 0)
+        for items, sep in variants:
+            txt = sep.join(f"{c_hint_key}{k}{c_hint_txt}{v}" for k, v in items)
+            if str_width(txt) <= room:
+                break
 
         if mode == "box":
             sp = max(0, (inner_w - str_width(txt)) // 2)
@@ -2267,15 +2601,19 @@ class TermbeatPlayer:
             sp = max(0, (inner_w - str_width(txt)) // 2)
             return fit_row(f"{' ' * sp}{txt}", inner_w)
 
-    def render_drawer_rows(self, lcd_inner_w: int, t_cfg: dict) -> list:
-        """Render full station directory inside the LCD screen (strictly 8 rows within lcd_inner_w)."""
+    def render_drawer_rows(self, lcd_inner_w: int, t_cfg: dict, max_rows: int = 8) -> list:
+        """Render the station directory as exactly max_rows rows, lcd_inner_w wide:
+        a header plus as many stations as the panel has room for. It used to be
+        a fixed 7, which left tall panels mostly empty and let the selection
+        scroll out of view in panels shorter than 8 rows."""
         c_bright = t_cfg["_c_bright"]
         c_accent = t_cfg["_c_accent"]
         c_dim = t_cfg["_c_dim"]
         c_warn = t_cfg["_c_warn"]
 
         total_stns = len(PLAYLIST)
-        visible_slots = 7
+        visible_slots = max(1, max_rows - 1)
+        self.drawer_page = visible_slots
 
         # Keep selected item visible in scrolling window
         if self.drawer_selected_idx < self.drawer_scroll_offset:
@@ -2326,8 +2664,69 @@ class TermbeatPlayer:
 
         return rows
 
+    def render_station_editor(self, cols: int, rows: int, t_cfg: dict) -> list:
+        """The [A] add-station form: a centred box, exactly rows x cols, in the
+        current theme. It replaces the whole frame in every design style, since
+        some styles' panels are only 4-5 rows tall."""
+        ed = self.editor
+        c_frame, c_accent, c_bright = t_cfg["_c_frame"], t_cfg["_c_accent"], t_cfg["_c_bright"]
+        c_dim, c_warn = t_cfg["_c_dim"], t_cfg["_c_warn"]
+        W = min(cols - 4, 84)
+        inner = W - 2
+        val_w = max(8, inner - 17)
+        labels = {"name": "name", "url": "stream url", "freq": "freq", "genre": "genre",
+                  "bitrate": "bitrate", "provider": "provider"}
+
+        body = [f" {c_dim}Adds a station to the end of stations.json, then tunes to it.{RST}", ""]
+        for i, field in enumerate(EDITOR_FIELDS):
+            active = i == ed["field"]
+            mark = f"{c_accent}►{RST}" if active else " "
+            if field == "provider":
+                p = ed["provider"]
+                if p == "auto":
+                    p = f"auto ({MetadataScraper.provider_of({'url': ed['fields']['url']})})"
+                value, cursor = f"‹ {p} ›", ""
+            else:
+                value = ed["fields"][field]
+                if str_width(value) > val_w - 1:          # keep the end of a long URL in view
+                    while str_width(value) > val_w - 2:
+                        value = value[1:]
+                    value = "…" + value
+                cursor = f"{c_accent}▌" if active else ""
+            text = c_bright if active else ""
+            body.append(f" {mark} {c_dim}{labels[field]:>10}{RST}  {text}{value}{cursor}{RST}")
+        body.append("")
+        problem = ed["error"] or self._editor_problem()
+        if problem:
+            body.append(f" {c_warn}⚠ {problem}{RST}")
+        else:
+            body.append(f" {c_bright}✓ ready - Enter saves and tunes{RST}")
+        body.append("")
+        for hint in ("Enter save & tune · Esc cancel · Tab/↑↓ field · ←→ provider · Ctrl-U clear",
+                     "Enter save · Esc cancel · Tab/↑↓ field · ←→ provider",
+                     "Enter save · Esc cancel · Tab next"):
+            if str_width(hint) + 1 <= inner:
+                break
+        body.append(f" {c_dim}{hint}{RST}")
+
+        title = " ADD STATION "
+        box = [f"{c_frame}╭─{c_accent}\033[1m{title}\033[22m{c_frame}"
+               f"{'─' * max(0, inner - 1 - len(title))}╮{RST}"]
+        box += [f"{c_frame}│{RST}{fit_row(line, inner)}{c_frame}│{RST}" for line in body]
+        box.append(f"{c_frame}╰{'─' * inner}╯{RST}")
+
+        pad = " " * max(0, (cols - W) // 2)
+        blank = fit_row("", cols)
+        out = [blank] * max(0, (rows - len(box)) // 2)
+        out += [fit_row(pad + r, cols) for r in box]
+        while len(out) < rows:
+            out.append(blank)
+        return out[:rows]
+
     def handle_key(self, key: str) -> bool:
         """Act on one key. Returns False to quit."""
+        if self.editor is not None:
+            return self._editor_key(key)
         if key in ("q", "Q", "QUIT"):
             return False
         if key == "ESC":
@@ -2343,15 +2742,17 @@ class TermbeatPlayer:
             self.cycle_design_style()
         elif key in ("l", "L"):
             self.toggle_drawer()
+        elif key in ("a", "A"):
+            self.open_station_editor()
         elif self.show_drawer:
             if key == "UP":
                 self.drawer_selected_idx = (self.drawer_selected_idx - 1) % len(PLAYLIST)
             elif key == "DOWN":
                 self.drawer_selected_idx = (self.drawer_selected_idx + 1) % len(PLAYLIST)
             elif key == "PAGEUP":
-                self.drawer_selected_idx = max(0, self.drawer_selected_idx - 7)
+                self.drawer_selected_idx = max(0, self.drawer_selected_idx - self.drawer_page)
             elif key == "PAGEDOWN":
-                self.drawer_selected_idx = min(len(PLAYLIST) - 1, self.drawer_selected_idx + 7)
+                self.drawer_selected_idx = min(len(PLAYLIST) - 1, self.drawer_selected_idx + self.drawer_page)
             elif key == "HOME":
                 self.drawer_selected_idx = 0
             elif key == "END":
@@ -2426,7 +2827,11 @@ class TermbeatPlayer:
                 frame = 0
                 next_deadline = time.monotonic()
                 while self.running:
-                    for key in user_input.get_keys():
+                    # The add-station form takes every key, so a pasted URL
+                    # arrives whole; otherwise the cap guards against a paste
+                    # queueing dozens of station changes.
+                    limit = None if self.editor is not None else MAX_KEYS_PER_FRAME
+                    for key in user_input.get_keys(limit):
                         if not self.handle_key(key):
                             self.running = False
                             break
@@ -2476,14 +2881,105 @@ class TermbeatPlayer:
                 self.cleanup()
 
     def render_frame(self, cols: int, rows: int, t_cfg: dict, frame: int) -> list:
+        if self.editor is not None:
+            return self.render_station_editor(cols, rows, t_cfg)
         if self.design_style == 1:
             return self.render_modern_neo(cols, rows, t_cfg, frame)
         elif self.design_style == 2:
             return self.render_minimal_zen(cols, rows, t_cfg, frame)
         elif self.design_style == 3:
             return self.render_cyberpunk(cols, rows, t_cfg, frame)
+        elif self.design_style == 4:
+            return self.render_tide(cols, rows, t_cfg)
         else:
             return self.render_retro_hifi(cols, rows, t_cfg, frame)
+
+    def _tide_layout(self, name: str, cols: int, rows: int) -> dict:
+        """TIDE's form-factor selection: wrap the station name, pick the largest
+        type scale that fits, and give each letter its slice of the spectrum.
+        It depends only on the name and the terminal size, so it runs once per
+        station or resize, not per frame."""
+        key = (name, cols, rows)
+        hit = self._tide_cache.get("layout")
+        if hit is not None and hit[0] == key:
+            return hit[1]
+
+        # Uppercase, fold accents onto their base letter, and turn anything the
+        # font cannot draw into a space so it never claims a band.
+        text = unicodedata.normalize("NFKD", name.upper())
+        text = "".join(c if c in FONT_5X7 else " " for c in text if not unicodedata.combining(c))
+        words = text.split() or ["RADIO"]
+        avail = rows - 5          # 2 margin rows above the type, 3 transport rows below
+
+        def wrap(max_chars):
+            lines, cur = [], ""
+            for wd in words:
+                if not cur:
+                    cur = wd
+                elif len(cur) + 1 + len(wd) <= max_chars:
+                    cur += " " + wd
+                else:
+                    lines.append(cur)
+                    cur = wd
+            lines.append(cur)
+            return lines
+
+        def height_px(scale, n_lines):
+            return n_lines * 7 * scale + (n_lines - 1) * 2 * scale
+
+        for scale in range(6, 0, -1):
+            gap = max(1, scale // 2)
+            max_chars = (cols + gap) // (5 * scale + gap)
+            lines = wrap(max_chars)
+            if (max(len(l) for l in lines) <= max_chars
+                    and (height_px(scale, len(lines)) + 1) // 2 <= avail):
+                break
+        else:
+            # Nothing fits whole: smallest type, long words and extra lines cut.
+            scale, gap = 1, 1
+            max_chars = (cols + 1) // 6
+            words = [wd[:max_chars] for wd in words]
+            lines = wrap(max_chars)[:max(1, (2 * avail + 2) // 9)]
+
+        glyph_h = 7 * scale
+        widths = [len(l) * 5 * scale + (len(l) - 1) * gap for l in lines]
+        block_w = min(cols, max(widths))
+        block_h = height_px(scale, len(lines))
+        block_h += block_h & 1
+        line_of_py = [0] * block_h
+        x_off, tops, baselines, line_off = [], [], [], []
+        nb = len(self.band_heights)
+        pitch = 5 * scale + gap
+        bands = []
+        n = 0
+        for ln, line in enumerate(lines):
+            top = ln * (glyph_h + 2 * scale)
+            x_off.append(max(0, (block_w - widths[ln]) // 2))     # centre each line
+            tops.append(top)
+            baselines.append(top + glyph_h)
+            line_off.append(n)
+            n += sum(1 for c in line if c != " ")
+            for py in range(top, top + glyph_h):
+                line_of_py[py] = ln
+            # Bands follow horizontal position, as the gradient follows height:
+            # every line runs low to high left to right, and the middle of the
+            # spectrum sits in the middle of the screen however the name wraps.
+            # Letter spans meet halfway between letters, so spaces split between
+            # their neighbours, and the widest line covers all the bands.
+            centres = [x_off[ln] + j * pitch + 5 * scale / 2 for j, c in enumerate(line) if c != " "]
+            edges = ([x_off[ln]] + [(a + b) / 2 for a, b in zip(centres, centres[1:])]
+                     + [x_off[ln] + widths[ln]])
+            for b_left, b_right in zip(edges, edges[1:]):
+                lo = min(nb - 1, max(0, int(b_left * nb / block_w)))
+                hi = min(nb, max(lo + 1, int(b_right * nb / block_w)))
+                bands.append((lo, hi))
+
+        lay = {"key": key, "avail": avail, "scale": scale, "gap": gap, "lines": lines,
+               "block_w": block_w, "block_h": block_h, "x_off": x_off, "tops": tops,
+               "baselines": baselines, "line_off": line_off, "line_of_py": line_of_py,
+               "bands": bands, "n": n}
+        self._tide_cache["layout"] = (key, lay)
+        return lay
 
     def render_retro_hifi(self, cols: int, rows: int, t_cfg: dict, frame: int) -> list:
         current_track = PLAYLIST[self.current_track_idx]
@@ -2673,7 +3169,7 @@ class TermbeatPlayer:
             lines.append(f"{pad}{C_FRAME}│ {C_LCD_BORDER}╭{'─' * lcd_w}╮{RST} {C_FRAME}│{RST}")
             t_sec = self.t_sec
             if self.show_drawer:
-                drawer_items = self.render_drawer_rows(lcd_w, t_cfg)
+                drawer_items = self.render_drawer_rows(lcd_w, t_cfg, 5)
                 for r in range(5):
                     r_str = drawer_items[r] if r < len(drawer_items) else " " * lcd_w
                     lines.append(f"{pad}{C_FRAME}│ {C_LCD_BORDER}│{C_LCD_BG}{fit_row(r_str, lcd_w, C_LCD_BG)}{C_LCD_BORDER}│{RST} {C_FRAME}│{RST}")
@@ -2838,16 +3334,18 @@ class TermbeatPlayer:
                     f"{C_HINT_KEY}[Q]{C_HINT_TXT} Quit Player"
                 )
             else:
+                # Exactly 100 cells. It used to be 119 and was cut off before
+                # [M] Mute and [Q] Quit.
                 status_bar = (
                     f"{C_TITLE_BG} "
-                    f"{C_HINT_KEY}[Space]{C_HINT_TXT} Play/Pause   "
-                    f"{C_HINT_KEY}[N/P]{C_HINT_TXT} Station   "
-                    f"{C_HINT_KEY}[V]{C_HINT_TXT} Viz   "
-                    f"{C_HINT_KEY}[T]{C_HINT_TXT} Theme   "
-                    f"{C_HINT_KEY}[D]{C_HINT_TXT} Style   "
-                    f"{C_HINT_KEY}[L]{C_HINT_TXT} Directory   "
-                    f"{C_HINT_KEY}[▲/▼]{C_HINT_TXT} Vol   "
-                    f"{C_HINT_KEY}[M]{C_HINT_TXT} Mute   "
+                    f"{C_HINT_KEY}[Space]{C_HINT_TXT} Play/Pause  "
+                    f"{C_HINT_KEY}[N/P]{C_HINT_TXT} Stn  "
+                    f"{C_HINT_KEY}[V]{C_HINT_TXT} Viz  "
+                    f"{C_HINT_KEY}[T]{C_HINT_TXT} Theme  "
+                    f"{C_HINT_KEY}[D]{C_HINT_TXT} Style  "
+                    f"{C_HINT_KEY}[L]{C_HINT_TXT} List  "
+                    f"{C_HINT_KEY}[A]{C_HINT_TXT} Add  "
+                    f"{C_HINT_KEY}[M]{C_HINT_TXT} Mute  "
                     f"{C_HINT_KEY}[Q]{C_HINT_TXT} Quit"
                 )
             lines.append(f"{pad}{C_FRAME}│{fit_row(status_bar, inner_w, C_TITLE_BG)}{C_FRAME}│{RST}")
@@ -2919,7 +3417,7 @@ class TermbeatPlayer:
         t_sec = self.t_sec
         viz_w = inner_w - 4
         if self.show_drawer:
-            v_rows = self.render_drawer_rows(viz_w, t_cfg)
+            v_rows = self.render_drawer_rows(viz_w, t_cfg, viz_h)
         elif self.tuning_glitch_frames > 0:
             v_rows = self.get_tuning_glitch_rows(viz_w, viz_h, t_cfg)
         else:
@@ -2997,7 +3495,7 @@ class TermbeatPlayer:
 
         t_sec = self.t_sec
         if self.show_drawer:
-            v_rows = self.render_drawer_rows(W, t_cfg)
+            v_rows = self.render_drawer_rows(W, t_cfg, viz_h)
         elif self.tuning_glitch_frames > 0:
             v_rows = self.get_tuning_glitch_rows(W, viz_h, t_cfg)
         else:
@@ -3067,7 +3565,7 @@ class TermbeatPlayer:
         t_sec = self.t_sec
         viz_w = inner_w - 4
         if self.show_drawer:
-            v_rows = self.render_drawer_rows(viz_w, t_cfg)
+            v_rows = self.render_drawer_rows(viz_w, t_cfg, viz_h)
         elif self.tuning_glitch_frames > 0:
             v_rows = self.get_tuning_glitch_rows(viz_w, viz_h, t_cfg)
         else:
@@ -3108,6 +3606,151 @@ class TermbeatPlayer:
             lines.append("")
 
         return lines
+
+    def _tide_type_rows(self, lay: dict, t_cfg: dict) -> list:
+        """Rasterise the station name, each letter flooded to its slice of the
+        spectrum. Returns the finished rows of the type block, cols wide."""
+        accent, bright = t_cfg["accent"], t_cfg["lcd_bright"]
+        ground, dim, warn = t_cfg["lcd_bg"], t_cfg["lcd_dim"], t_cfg["warn"]
+        cache = self._tide_cache
+        scale, block_h = lay["scale"], lay["block_h"]
+
+        # The sheet: one gradient behind the whole block, fixed in frame space
+        # rather than per glyph. The block maps onto t in [0, 0.5], so the
+        # ping-pong runs one way - accent at the bottom, lcd_bright at the top -
+        # and a drift term added to t later would wrap without a seam.
+        sheet_key = (lay["key"], accent, bright, ground, dim, warn)
+        hit = cache.get("sheet")
+        if hit is not None and hit[0] == sheet_key:
+            grad_row, cap_row, unlit = hit[1]
+        else:
+            grad_row, cap_row = [], []
+            span = max(1, block_h - 1)
+            for py in range(block_h):
+                t = 0.5 * (block_h - 1 - py) / span
+                tt = t * 2.0 if t < 0.5 else (1.0 - t) * 2.0
+                g = _lerp3(accent, bright, tt)
+                grad_row.append(g)
+                cap_row.append(_lerp3(g, (255, 255, 255), 0.45))
+            unlit = _lerp3(ground, dim, 0.42)
+            cache["sheet"] = (sheet_key, (grad_row, cap_row, unlit))
+
+        # Each letter averages the bands under its horizontal span (worked out in
+        # _tide_layout), so the spectrum's shape reads across every line the way
+        # the bars show it, its middle in the middle of the screen.
+        bh, ph = self.band_heights, self.peak_heights
+        full = self.max_height
+        vals, pks = [], []
+        for lo, hi in lay["bands"]:
+            k = (hi - lo) * full
+            vals.append(sum(bh[lo:hi]) / k)
+            pks.append(sum(ph[lo:hi]) / k)
+        # Stretch each letter away from the spectrum's mean: the overall level
+        # survives and neighbouring letters stay apart. Monotonic, so a peak
+        # never lands below its flood, and silence stays at exactly zero.
+        m = sum(bh) / (len(bh) * full)
+        glyph_h = 7 * scale
+        flood = tuple(round(min(1.0, max(0.0, m + (v - m) * TIDE_EXPAND)) * glyph_h) for v in vals)
+        peak = tuple(round(min(1.0, max(0.0, m + (p - m) * TIDE_EXPAND)) * glyph_h) for p in pks)
+
+        # Paused or silent frames repeat exactly; skip the raster for them.
+        rows_key = (sheet_key, flood, peak)
+        hit = cache.get("rows")
+        if hit is not None and hit[0] == rows_key:
+            return hit[1]
+
+        line_of_py, line_off, base = lay["line_of_py"], lay["line_off"], lay["baselines"]
+        pk_w = min(2, scale)
+
+        def colour_fn(px, py, li):
+            ln = line_of_py[py]
+            g = line_off[ln] + li
+            h = base[ln] - py                      # 1 .. glyph_h above the baseline
+            f = flood[g]
+            if h <= f:                             # under the flood the sheet shows
+                return cap_row[py] if f - h < scale else grad_row[py]
+            p = peak[g]
+            if p > f and p - pk_w < h <= p:
+                return warn
+            return unlit
+
+        pix = Pix(lay["block_w"], block_h, ground)
+        for ln, line in enumerate(lay["lines"]):
+            draw_word(pix, lay["x_off"][ln], lay["tops"][ln], line, scale, lay["gap"], colour_fn)
+
+        cols = lay["key"][1]
+        c_ground = t_cfg["_c_lcd_bg"]
+        left = c_ground + " " * ((cols - lay["block_w"]) // 2)
+        body = [fit_row(left + r, cols, c_ground) for r in pix.to_rows()]
+        cache["rows"] = (rows_key, body)
+        return body
+
+    def render_tide(self, cols: int, rows: int, t_cfg: dict) -> list:
+        current_track = PLAYLIST[self.current_track_idx]
+        C_DIM = t_cfg["_c_dim"]
+        C_ACCENT = t_cfg["_c_accent"]
+        C_GROUND = t_cfg["_c_lcd_bg"]
+
+        lay = self._tide_layout(current_track["station"], cols, rows)
+        avail = lay["avail"]
+
+        prov = str(current_track.get("provider") or "stream").upper()
+        net_l = f"  NET · {prov} · {current_track.get('freq', '')} FM"
+        net_r = f"{current_track.get('bitrate', '128kbps')} · {current_track.get('genre', 'RADIO')}  "
+        n_sp = max(1, cols - str_width(net_l) - str_width(net_r))
+        lines = [fit_row(f"{C_DIM}{net_l}{' ' * n_sp}{net_r}{RST}", cols), fit_row("", cols)]
+
+        if self.show_drawer:
+            # Without this, [L] would open a drawer nobody can see that still
+            # captures the arrow keys and Enter.
+            dw = min(cols - 4, 96)
+            d_pad = " " * ((cols - dw) // 2)
+            d_rows = min(avail, len(PLAYLIST) + 1)          # header + every station that fits
+            body = [fit_row(d_pad + r, cols) for r in self.render_drawer_rows(dw, t_cfg, d_rows)]
+            filler = fit_row("", cols)
+        elif self.tuning_glitch_frames > 0:
+            # The same static burst the other styles show on a station change,
+            # filling the whole type region on the ground colour.
+            filler = fit_row(C_GROUND, cols, C_GROUND)
+            body = [fit_row(C_GROUND + r, cols, C_GROUND)
+                    for r in self.get_tuning_glitch_rows(cols, avail, t_cfg)]
+        else:
+            body = self._tide_type_rows(lay, t_cfg)
+            filler = fit_row(C_GROUND, cols, C_GROUND)
+        body = body[:avail]
+        top_pad = (avail - len(body)) // 2
+        lines.extend([filler] * top_pad)
+        lines.extend(body)
+        lines.extend([filler] * (avail - top_pad - len(body)))
+
+        lines.append(self.render_transport_bar(cols, t_cfg))
+
+        mins = self.track_elapsed // 60
+        secs = self.track_elapsed % 60
+        timer_colon = self.timer_colon()
+        if self.track_duration and self.track_duration > 0:
+            d_mins = self.track_duration // 60
+            d_secs = self.track_duration % 60
+            time_str = f"{mins:02d}{timer_colon}{secs:02d} / {d_mins:02d}:{d_secs:02d}"
+        else:
+            time_str = f"{mins:02d}{timer_colon}{secs:02d}  [LIVE]"
+        status_txt, status_col = self.status_badge(t_cfg)
+        e_sp = max(1, cols - 4 - str_width(time_str) - str_width(status_txt))
+        lines.append(fit_row(f"  {C_DIM}{time_str}{' ' * e_sp}{status_col}\033[1m{status_txt}\033[22m{RST}", cols))
+
+        slots = max(8, min(24, (cols - 24) // 2))
+        if self.is_muted:
+            vol_disp = f"{C_DIM}VOLUME [{C_ERROR}{'▱' * slots}{C_DIM}]  {C_MUTED}MUTED{RST}"
+        else:
+            filled = int((self.volume / 100.0) * slots)
+            vol_disp = (f"{C_DIM}VOLUME [{C_ACCENT}{'▰' * filled}{C_DIM}{'▱' * (slots - filled)}]"
+                        f"  {C_ACCENT}{self.volume:3d}%{RST}")
+        v_sp = max(0, (cols - str_width(vol_disp)) // 2)
+        lines.append(fit_row(' ' * v_sp + vol_disp, cols))
+
+        while len(lines) < rows:
+            lines.append(fit_row("", cols))
+        return lines[:rows]
 
     def cleanup(self):
         if getattr(self, "_cleaned_up", False):

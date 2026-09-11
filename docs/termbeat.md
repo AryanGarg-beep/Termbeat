@@ -2,12 +2,13 @@
 
 *A retro hi-fi internet-radio player that runs entirely in a terminal.*
 
-Single file: [`radio.py`](../radio.py) · 3,155 lines · pure Python 3 standard library · zero pip
+Single file: [`radio.py`](../radio.py) · 3,798 lines · pure Python 3 standard library · zero pip
 dependencies.
 
-This document describes the codebase as it stands after the September 2026 fix pass. It is the
-reference for how termbeat works today; how it got here — the v2 → v3 changelog and what came
-before — is in [`history.md`](history.md).
+This document describes the codebase as it stands after the September 2026 fix pass and the
+additions that followed: TIDE, four themes, and the add-station form. It is the reference for how
+termbeat works today; how it got here — the
+v2 → v3 changelog, what came before, and what came after — is in [`history.md`](history.md).
 
 ---
 
@@ -55,21 +56,27 @@ Both external programs are optional. Without `mpv` the UI runs silently and says
 
 ### Feature surface
 
-- **16 preset stations** (`DEFAULT_PLAYLIST`, `radio.py:109`) — SomaFM channels, Nightwave Plaza,
+- **16 preset stations** (`DEFAULT_PLAYLIST`, `radio.py:110`) — SomaFM channels, Nightwave Plaza,
   Radio Paradise, KEXP — overridable and extendable via `~/.config/termbeat/stations.json`, which is
-  **hot-reloaded** when its mtime changes (`check_reload_stations`, `radio.py:1666`).
-- **4 design aesthetics** cycled with `D`: *Retro Hi-Fi*, *Modern Neo*, *Minimal Zen*, *Cyberpunk*
-  (`render_frame` dispatch, `radio.py:2478`).
-- **5 colour themes** cycled with `T` (`THEMES`, `radio.py:355`): Classic Tuna, Cyberpunk, Amber CRT,
-  Matrix, Synthwave.
+  reloaded when you open the station list or save a new station (`check_reload_stations`,
+  `radio.py:1876`).
+- **Add a station from inside the app** (`A`): a form for name, stream URL, frequency, genre,
+  bitrate and provider. Saving appends it to `stations.json` and tunes to it
+  ([§11](#adding-a-station-from-the-app)).
+- **5 design aesthetics** cycled with `D`: *Retro Hi-Fi*, *Modern Neo*, *Minimal Zen*, *Cyberpunk*,
+  *TIDE* (`render_frame` dispatch, `radio.py:2883`). TIDE sets the station name as large bitmap
+  type and floods each letter with its slice of the spectrum ([§9.7](#97-the-tide-renderer)).
+- **9 colour themes** cycled with `T` (`THEMES`, `radio.py:361`): Classic Tuna, Cyberpunk, Amber CRT,
+  Matrix, Synthwave, Blue Hour, Ultraviolet, Ember, Deep Field.
 - **2 visualizers** cycled with `V`: an 18-band spectrum analyser and an oscilloscope; Modern Neo and
-  Cyberpunk substitute a sub-pixel Braille waveform (2×4 dots per cell).
+  Cyberpunk substitute a sub-pixel Braille waveform (2×4 dots per cell). TIDE is its own visualizer
+  and ignores `V`.
 - **Responsive layout** with three retro form factors — *Studio Tower* (tall), *Deck-78* (compact),
   and the fixed 102-column *standard deck* — plus per-width transport-button label sets.
 - **Live stream health** in the header: `PLAYING` / `BUFFERING` / `PAUSED` / `STOPPED` /
   `STREAM ERROR` / `NO MPV`, derived from mpv's actual state, not from the app's intent.
-- **Station directory drawer** (`L`), analog tuning static-glitch effect on station change, elapsed
-  timer with a wall-clock-blinked colon, 24-slot volume slider, mute.
+- **Station directory drawer** (`L`), sized to the panel it opens in; analog tuning static-glitch
+  effect on station change; elapsed timer with a wall-clock-blinked colon; 24-slot volume slider; mute.
 - **btop-style "terminal too small"** screen below 70×18.
 
 ### Who it is for
@@ -119,12 +126,19 @@ There is no build step, no `pip install`, no virtualenv. First run writes
 | `t` | Cycle colour theme |
 | `d` | Cycle design aesthetic |
 | `l` | Open / close the station directory drawer |
-| `q` / `Ctrl-C` / `Esc` | Quit (`Esc` closes the drawer first if it is open) |
+| `a` | Add a station |
+| `q` / `Ctrl-C` / `Esc` | Quit (`Esc` closes the drawer or the add-station form first) |
 
-**In the drawer:** `↑`/`↓` move the selection, `PageUp`/`PageDown` jump seven, `Home`/`End` go to the
-ends, `Enter` tunes the selected station, `l`/`Esc` closes.
+**In the drawer:** `↑`/`↓` move the selection, `PageUp`/`PageDown` jump one page (as many stations as
+the drawer is showing), `Home`/`End` go to the ends, `Enter` tunes the selected station, `l`/`Esc`
+closes.
 
-All of this is dispatched by a single method, `handle_key(key) -> bool` (`radio.py:2329`); returning
+**In the add-station form:** type into the highlighted field; `Tab`/`↓` and `Shift-Tab`/`↑` move
+between fields; `←`/`→` cycle the provider; `Backspace` deletes and `Ctrl-U` clears the field;
+`Enter` saves and tunes to the station; `Esc` cancels. The form takes every key while it is open, so
+`q` types a q instead of quitting.
+
+All of this is dispatched by a single method, `handle_key(key) -> bool` (`radio.py:2726`); returning
 `False` quits.
 
 ---
@@ -171,7 +185,7 @@ All are `daemon=True`. Shared state is guarded by small locks: `StreamPlayer._se
 metadata thread mutates the station dicts in place (only string/int leaf values), the render thread
 only reads them — benign under CPython's GIL for this access pattern.
 
-### The main loop (`run`, `radio.py:2419`)
+### The main loop (`run`, `radio.py:2820`)
 
 ```python
 with RawInput() as user_input:
@@ -205,7 +219,7 @@ Key properties:
 
 ## 5. The audio engine — `StreamPlayer`
 
-`radio.py:760`. Owns the `mpv` subprocess and the IPC socket.
+`radio.py:966`. Owns the `mpv` subprocess and the IPC socket.
 
 ### Why a reader thread is mandatory
 
@@ -213,7 +227,7 @@ mpv answers **every** IPC command with a JSON line and also emits asynchronous e
 reads them they queue on the socket. Measured on this machine: about **300 commands** — roughly 70
 seconds of ordinary volume tapping — fills the 212,992-byte kernel socket buffer, after which **mpv
 spins at 100% of a CPU core** and silently ignores all further commands, while the old UI kept
-showing `PLAYING`. The v3 `_read_loop` (`radio.py:891`) drains the socket continuously:
+showing `PLAYING`. The v3 `_read_loop` (`radio.py:1097`) drains the socket continuously:
 
 ```python
 def _read_loop(self):
@@ -233,7 +247,7 @@ def _read_loop(self):
         self._drop_connection()
 ```
 
-`_handle_message` (`radio.py:917`) routes by shape: `property-change` events update `self._props`
+`_handle_message` (`radio.py:1123`) routes by shape: `property-change` events update `self._props`
 under `_state_lock`; `end-file` with `reason in ("error","unknown")` sets `_load_failed`;
 `start-file`/`file-loaded` clear it. On connect, `_apply_desired_state` subscribes to the properties
 in `OBSERVED`:
@@ -248,8 +262,8 @@ not a blocking round trip as before.
 
 ### Supervision
 
-`_supervise` (`radio.py:813`) runs on its own thread so the **first frame is not blocked** on mpv
-coming up. It spawns mpv (`_spawn_mpv`, `radio.py:854`), waits up to 5 s for the socket, connects,
+`_supervise` (`radio.py:1019`) runs on its own thread so the **first frame is not blocked** on mpv
+coming up. It spawns mpv (`_spawn_mpv`, `radio.py:1060`), waits up to 5 s for the socket, connects,
 starts `_read_loop`, and re-applies desired state (`_want_url`, `_want_volume`, `_want_pause`,
 `_want_mute`). If mpv exits or the socket drops, it reconnects with exponential backoff
 (0.4 s → 10 s) and replays that state, so a stream survives an mpv crash or a network blip.
@@ -285,16 +299,16 @@ instead of showing fabricated music.
 
 ### Socket location
 
-`_runtime_dir()` (`radio.py:95`) puts the socket at `$XDG_RUNTIME_DIR/termbeat/mpv-<pid>.sock`
+`_runtime_dir()` (`radio.py:96`) puts the socket at `$XDG_RUNTIME_DIR/termbeat/mpv-<pid>.sock`
 (mode 0700, per-user) rather than the world-readable, guessable `/tmp/termbeat_mpv_<pid>.sock`.
 
 ---
 
 ## 6. The spectrum engine — `CavaStreamEngine`
 
-`radio.py:1328`. Wraps a `cava` subprocess configured to emit raw ASCII bar values.
+`radio.py:1534`. Wraps a `cava` subprocess configured to emit raw ASCII bar values.
 
-`_start_cava` (`radio.py:1347`) writes a temp config into the runtime dir:
+`_start_cava` (`radio.py:1553`) writes a temp config into the runtime dir:
 
 ```ini
 [general]
@@ -315,7 +329,7 @@ monstercat = 1
 noise_reduction = 77
 ```
 
-`_reader_loop` (`radio.py:1394`) splits each line on `;`, normalises the 18 values to `0.0–1.0`, and
+`_reader_loop` (`radio.py:1600`) splits each line on `;`, normalises the 18 values to `0.0–1.0`, and
 stores them with a timestamp under `self.lock`. `get_bands()` returns `(bands, is_active)` where
 `is_active` is true only if the data is < 0.5 s old **and** at least one band exceeds 0.02 — so
 silence reads as inactive and `update_physics` falls back to the simulation.
@@ -323,7 +337,7 @@ silence reads as inactive and `update_physics` falls back to the simulation.
 ### Suspend on pause (v3)
 
 A running `cava` costs ~2.1% of a CPU core computing an FFT of whatever the sound card is doing —
-including silence — and the pre-fix code never stopped it. `set_suspended(bool)` (`radio.py:1410`)
+including silence — and the pre-fix code never stopped it. `set_suspended(bool)` (`radio.py:1616`)
 sends `SIGSTOP`/`SIGCONT`:
 
 ```python
@@ -341,7 +355,7 @@ first if the process is stopped — a `SIGSTOP`ped process cannot act on `SIGTER
 
 ## 7. Now-playing metadata — `MetadataScraper` + `HttpSession`
 
-`radio.py:1047` and `radio.py:1122`.
+`radio.py:1253` and `radio.py:1328`.
 
 ### `HttpSession` — keep-alive JSON with ETag revalidation
 
@@ -364,8 +378,8 @@ stream itself. v3:
 | **Directory sweep** | 600 s | all providers, to refresh listener counts for stations you are *not* on |
 | **On failure** | exponential backoff to 300 s | — |
 
-`set_active_station(station)` (`radio.py:1161`) is called from `_tune`; it marks the tuned slot due
-immediately. `_tuned_request()` (`radio.py:1179`) picks the URL and apply-function for the current
+`set_active_station(station)` (`radio.py:1367`) is called from `_tune`; it marks the tuned slot due
+immediately. `_tuned_request()` (`radio.py:1385`) picks the URL and apply-function for the current
 provider. For SomaFM specifically it uses the **per-channel** endpoint
 `https://api.somafm.com/songs/<id>.json` — **911 bytes** against **52,751 bytes** for the full
 `channels.json` directory, a 58× reduction on the endpoint that dominated this app's traffic.
@@ -378,7 +392,7 @@ Per-provider apply functions (`_apply_somafm`, `_apply_somafm_channel`, `_apply_
 
 ## 8. Input — `RawInput` and `parse_key_bytes`
 
-`radio.py:604` and `radio.py:673`.
+`radio.py:809` and `radio.py:878`.
 
 The pre-fix `get_key()` did `os.read(fd, 32)` and matched the **entire buffer** against single-key
 byte patterns, so **any two keys arriving within one frame matched nothing and were silently
@@ -387,14 +401,16 @@ dropped** — holding a key down, or key-repeat scrolling the drawer, did nothin
 `parse_key_bytes(data) -> (keys, leftover)` is a proper incremental parser:
 
 - **CSI** (`ESC [ … final`) and **SS3** (`ESC O final`) sequences → `UP`/`DOWN`/`LEFT`/`RIGHT`,
-  `HOME`/`END`, `PAGEUP`/`PAGEDOWN`, `BACKTAB` (`_CSI_KEYS`, `radio.py:593`).
+  `HOME`/`END`, `PAGEUP`/`PAGEDOWN`, `BACKTAB` (`_CSI_KEYS`, `radio.py:798`).
 - Control bytes → `ENTER`, `SPACE`, `TAB`, `BACKSPACE`, `QUIT` (Ctrl-C).
 - Everything else → decoded as UTF-8, 1–4 bytes at a time.
 - A trailing **partial** escape sequence or partial multi-byte character is returned as `leftover`
   and prepended to the next read, so a sequence split across two `read()`s is preserved.
 
-`RawInput.get_keys()` (`radio.py:717`) drains stdin non-blockingly into one buffer, runs the parser,
+`RawInput.get_keys()` (`radio.py:922`) drains stdin non-blockingly into one buffer, runs the parser,
 and caps the result at `MAX_KEYS_PER_FRAME = 32` so a paste cannot queue hundreds of station changes.
+While the add-station form is open, `run()` passes `limit=None` instead, so a pasted URL arrives
+whole.
 A lone `ESC` is held for `ESC_TIMEOUT = 0.05 s` to disambiguate it from the start of an arrow
 sequence before being delivered.
 
@@ -406,7 +422,7 @@ sequence before being delivered.
 ## 9. The rendering pipeline
 
 A frame is a `list[str]`, one entry per terminal row, each already exactly `cols` cells wide.
-`render_frame` (`radio.py:2478`) dispatches on `design_style` to one of four ~90–370-line renderers.
+`render_frame` (`radio.py:2883`) dispatches on `design_style` to one of five ~90–370-line renderers.
 
 ### 9.1 Width measurement
 
@@ -415,16 +431,16 @@ sequences and possibly wide or zero-width characters.
 
 | Function | Line | Role |
 | :-- | :-- | :-- |
-| `char_width(c)` | 492 | width of one character: 0 (combining/zero-width/VS), 1, or 2 (East Asian Wide/Fullwidth). Memoised in `_CHAR_WIDTH_CACHE`. |
-| `_measure(clean)` | 506 | width of an escape-free string; `@lru_cache(maxsize=128)` |
-| `str_width(s)` | 521 | strips ANSI via `ANSI_ESCAPE_RE`, fast-paths pure ASCII, else `_measure` |
-| `cell_slots(text)` | 532 | splits a string into one entry per *cell* (a wide glyph → itself + an empty continuation slot); combining marks fold into the preceding cell. `@lru_cache(maxsize=128)` |
-| `truncate_ansi(s, w)` | 554 | cuts to `w` visible cells without ever splitting an escape sequence |
-| `fit_row(s, w, bg, fill)` | 580 | the workhorse: truncate if long, pad with `fill` if short, so the result is **exactly** `w` cells |
+| `char_width(c)` | 605 | width of one character: 0 (combining/zero-width/VS), 1, or 2 (East Asian Wide/Fullwidth). Memoised in `_CHAR_WIDTH_CACHE`. |
+| `_measure(clean)` | 619 | width of an escape-free string; `@lru_cache(maxsize=128)` |
+| `str_width(s)` | 634 | strips ANSI via `ANSI_ESCAPE_RE`, fast-paths pure ASCII, else `_measure` |
+| `cell_slots(text)` | 645 | splits a string into one entry per *cell* (a wide glyph → itself + an empty continuation slot); combining marks fold into the preceding cell. `@lru_cache(maxsize=128)` |
+| `truncate_ansi(s, w)` | 667 | cuts to `w` visible cells without ever splitting an escape sequence |
+| `fit_row(s, w, bg, fill)` | 693 | the workhorse: truncate if long, pad with `fill` if short, so the result is **exactly** `w` cells |
 
 `_measure` was, in the pre-fix profile, **55% of all render time** — its `isascii()` fast path never
 fired because every row contains box-drawing glyphs, so every row ran a per-character Python loop
-(4.8M `ord()` calls per 1,500 frames). v3 adds `_NONTRIVIAL_WIDTH_RE` (`radio.py:482`), a single
+(4.8M `ord()` calls per 1,500 frames). v3 adds `_NONTRIVIAL_WIDTH_RE` (`radio.py:595`), a single
 compiled character class covering every codepoint that is *not* exactly one cell wide — generated
 offline by classifying all of `range(0x110000)` with `unicodedata`. If it does not match, the width
 is just `len()`:
@@ -446,7 +462,7 @@ built from) to width 2, for terminals in CJK locales configured that way.
 
 ### 9.2 The damage-tracked emitter — `emit_frame`
 
-`radio.py:2389`. The pre-fix loop re-serialised and re-sent the **entire screen every frame** — a
+`radio.py:2790`. The pre-fix loop re-serialised and re-sent the **entire screen every frame** — a
 measured 563 KB/s at 101×54 while playing, and *the same* 563 KB/s while paused, where only 0.2% of
 rows differ.
 
@@ -488,45 +504,126 @@ Each renderer chooses a form factor from the terminal size:
 | Studio Tower | `rows ≥ 32 and cols ≥ 70` | tall; large visualizer, full inline directory |
 | Deck-78 compact | `cols < 102` and not tall | 78-col chassis, visualizer beside the LCD |
 | Standard deck | otherwise | fixed 102-column chassis |
-| Too-small | `cols < 70 or rows < 18` | `render_btop_size_warning` (`radio.py:1579`) |
+| Too-small | `cols < 70 or rows < 18` | `render_btop_size_warning` (`radio.py:1789`) |
+
+TIDE has no chassis. Its form factor is the type scale: `_tide_layout` wraps the station name and
+picks the largest scale that fits ([§9.7](#97-the-tide-renderer)).
 
 `render_frame`'s output is clamped with `lines[:rows]` in `run()` so an off-by-one can never scroll
 the frame. Shared sub-renderers: `render_transport_bar` (per-width button labels at 68/54/44 cols),
-`render_status_bar` (`box`/`bracket`/`plain` modes), `render_button`, `render_drawer_rows`.
+`render_status_bar` (`box`/`bracket`/`plain` modes), `render_button`, and
+`render_drawer_rows(w, t_cfg, max_rows)`.
+
+The drawer returns exactly `max_rows` rows: a header plus `max_rows - 1` station slots. Each caller
+passes the height of the panel it draws into — the visualizer height in Modern Neo, Minimal Zen and
+Cyberpunk, 5 in Deck-78, 8 in the standard deck, and in TIDE one row per station up to the height of
+the type region. It used to be a fixed 7 slots, which left tall panels mostly empty and let the
+selection scroll out of view in panels shorter than 8 rows. `PageUp`/`PageDown` and opening the
+drawer use the same page size (`drawer_page`).
+
+The hint bar, `render_status_bar`, has five wordings, fullest first, and uses the first that fits
+the width it is given, so it is never cut short. Every chassis style shows `[A] Add`; TIDE has no
+hint bar. Fixed width thresholds used to truncate it: Modern Neo at 70 columns ended `[Q] Qui`, and
+the standard deck's own 119-cell bar lost `[M] Mute` and `[Q] Quit` in its 100-cell slot.
 
 ### 9.4 Visualizers
 
 | Method | Line | Output |
 | :-- | :-- | :-- |
-| `get_equalizer_rows` | 1882 | 18-band spectrum, interpolated to the panel width, 9 block glyphs `▁▂▃…█` with a floating peak-hold cap `▔` |
-| `get_oscilloscope_rows` | 1948 | three summed sine components (bass/mid/treble weighted), `∿`/`~` on the trace, `·` near it |
-| `get_braille_wave_rows` | 2004 | same wave at 2×4 sub-cell resolution using Braille codepoints `U+2800 + dotmask` |
-| `get_tuning_glitch_rows` | 2075 | 5-frame static-noise "tuning" effect on station change, from `STATIC_CHARS` |
+| `get_equalizer_rows` | 2221 | 18-band spectrum, interpolated to the panel width, 9 block glyphs `▁▂▃…█` with a floating peak-hold cap `▔` |
+| `get_oscilloscope_rows` | 2287 | three summed sine components (bass/mid/treble weighted), `∿`/`~` on the trace, `·` near it |
+| `get_braille_wave_rows` | 2343 | same wave at 2×4 sub-cell resolution using Braille codepoints `U+2800 + dotmask` |
+| `get_tuning_glitch_rows` | 2414 | 5-frame static-noise "tuning" effect on station change, from `STATIC_CHARS`. One `random.choices` call per row; it was one `random.choice` per cell, 2.3× slower |
 
 The spectrum's ballistics live in `update_physics` (§10), not here; these methods only rasterise the
 current `band_heights` / energies into rows.
 
 ### 9.5 Themes and colours
 
-`THEMES` (`radio.py:355`) is five dicts of RGB triples. At import each is augmented with
+`THEMES` (`radio.py:361`) is nine dicts of RGB triples. At import each is augmented with
 pre-built escape strings (`_c_frame`, `_c_accent`, `_c_bright`, `_c_dim`, `_c_warn`,
 `_c_title_fg`, `_c_lcd_border`, …). The renderers read those directly; the pre-fix renderers rebuilt
 every escape with `fg(*t_cfg[...])` on every frame (~31 `fg()` calls/frame in Retro Hi-Fi alone).
 Theme-independent colours are module constants (`C_ERROR`, `C_MUTED`, `C_VOL_LABEL`, the `CYBER_*`
-neon palette).
+neon palette). TIDE is the one renderer that also reads the raw tuples (`accent`, `lcd_bright`,
+`lcd_bg`, `lcd_dim`, `warn`), because it interpolates between them ([§9.7](#97-the-tide-renderer)).
 
 ### 9.6 The status badge
 
-`status_badge(t_cfg, compact=False)` (`radio.py:1546`) is the single source of the play-state label
+`status_badge(t_cfg, compact=False)` (`radio.py:1756`) is the single source of the play-state label
 and colour, replacing four independent copies that each derived it from `is_playing`/`is_stopped`
 alone. It reads `self.stream_state` (from `health()`), so `BUFFERING` and `STREAM ERROR` are
 reachable states in the UI.
+
+### 9.7 The TIDE renderer
+
+TIDE sets the station name as large 5×7 bitmap type. Behind the type sits one colour gradient,
+fixed in frame space rather than per glyph. Each letter is bound to a slice of the 18-band spectrum
+and floods upward from its own baseline, revealing the gradient beneath it. Above the flood line a
+letter stays visible but dim, so the name is readable in silence.
+
+| Symbol | Line | Role |
+| :-- | :-- | :-- |
+| `FONT_5X7`, `_FONT_BITS` | 534, 577 | glyphs for A–Z, 0–9, space, `-`, `'` and `.`, each 7 pipe-delimited rows of 5; `_FONT_BITS` holds the lit cells of each, parsed once at import |
+| `TIDE_EXPAND` | 585 | how far each letter is stretched away from the spectrum's mean level (1.25) |
+| `Pix` | 722 | half-pixel raster: one cell is 1 px wide × 2 px tall, emitted as `▀` with the top pixel as foreground and the bottom as background |
+| `draw_word` | 767 | stamps glyphs into a `Pix`, calling `colour_fn(px, py, letter_index)` for every lit pixel |
+| `_tide_layout` | 2897 | the fitting pass: wrap, scale, geometry, and each letter's bands |
+| `_tide_type_rows` | 3610 | the per-frame raster: band levels, the colour callback, the rows |
+| `render_tide` | 3688 | the frame: margin row, type region, transport, clock and volume |
+
+**Layout.** `_tide_layout` uppercases the name, folds accents onto their base letter, and turns any
+character the font lacks into a space. It word-wraps and tries scales 6 down to 1, taking the
+largest at which every line fits `cols` and the block fits `rows - 5` (2 margin rows above, 3
+transport rows below). If nothing fits it falls back to scale 1, cutting long words and extra lines.
+Each line is centred. The result depends only on `(name, cols, rows)` and is cached, so it runs once
+per station or resize, never per frame.
+
+**Band binding.** Each letter averages the bands under its horizontal span in the block. Spans meet
+halfway between letters, so spaces are split between their neighbours, and the widest line covers
+all 18 bands. Every line runs low to high from left to right, and the middle of the spectrum sits in
+the middle of the screen however the name wraps, matching the bar visualizers. Binding in reading
+order was tried first; it folded the spectrum at a line break, so a centre hump showed as a diagonal.
+
+The averaged levels are stretched away from the mean of all 18 bands by `TIDE_EXPAND`. Real cava
+bands move together, and the stretch keeps neighbouring letters apart. At 1.8 it clipped the quiet
+ends to dark and pegged the loud middle full; 1.25 keeps the slopes. The same stretch applies to
+`peak_heights`, and it is monotonic, so a peak never lands below its flood and silence stays at 0.
+TIDE adds no physics: it reads `band_heights` and `peak_heights` like every other visualizer.
+
+**Colour.** Every colour is interpolated from the theme's raw tuples:
+
+| Role | Source |
+| :-- | :-- |
+| gradient | `accent` at the bottom of the block → `lcd_bright` at the top, one sample per pixel row |
+| surface cap (top `scale` px of a flood) | the gradient at that row, mixed 45% toward white |
+| unlit letter | `lcd_bg` mixed 42% toward `lcd_dim` |
+| peak marker (1–2 px, only above the flood) | `warn` |
+| ground | `lcd_bg` |
+| margin text, empty volume | `lcd_dim` |
+
+The gradient is sampled with a ping-pong (`t*2` below 0.5, `(1-t)*2` above) so that a drift term
+would wrap without a seam, and the block maps onto `t ∈ [0, 0.5]` so the visible ramp runs one way.
+Where `accent` and `lcd_bright` sit close together (Amber CRT) the ramp is nearly flat, and the
+flood/unlit step and the surface cap carry the read. Where they are far apart (Blue Hour, Ember,
+Deep Field) the ramp passes through a pale green midpoint, because the blend is in RGB.
+
+**Output and caching.** `Pix.to_rows` collapses each run of cells with the same foreground and
+background into one escape and re-sends only the half that changed. Escape strings are cached by RGB
+in `_FG_SGR` / `_BG_SGR`; these level off at about 1,200 entries each across every theme, size and
+station. The gradient and cap colour of each pixel row are cached per layout and theme. Finished rows
+are cached against the quantised flood and peak heights, so paused and silent frames skip the
+raster entirely.
+
+**Other states.** With the drawer open, the type region shows `render_drawer_rows`, one row per
+station. During the tuning glitch it shows `get_tuning_glitch_rows` across the whole region on the
+ground colour. Every row TIDE returns, blanks included, is exactly `cols` cells.
 
 ---
 
 ## 10. State and physics — `update_physics`
 
-`radio.py:1756`. One call per frame. In order:
+`radio.py:2095`. One call per frame. In order:
 
 1. **Poll real stream state.** `self.stream_state, self.stream_live = self.stream_player.health()`.
    If `mpv` is absent, `stream_live` falls back to `is_playing and not is_stopped` so the deck still
@@ -549,13 +646,13 @@ reachable states in the UI.
 9. Every 10th tick, if playing, pull `media-title` from mpv for generic/SomaFM stations that lack
    fresh API metadata.
 
-`apply_monstercat_filter` (`radio.py:1730`) is CAVA's spatial smoothing (`cava.c`): each bar bleeds
+`apply_monstercat_filter` (`radio.py:2069`) is CAVA's spatial smoothing (`cava.c`): each bar bleeds
 into its neighbours by `value / (factor ** distance)`. v3 tables `factor ** distance` per
 `(monstercat, n)` in `_monstercat_table` instead of calling `**` in the inner loop.
 
 ### Station change — `_tune(idx)`
 
-`radio.py:1623`. One method, replacing three near-identical copies (`next_track`, `prev_track`,
+`radio.py:1833`. One method, replacing three near-identical copies (`next_track`, `prev_track`,
 `select_preset`, and the resume branch of `toggle_play` all call it). It resets the per-track state,
 triggers the tuning glitch, calls `stream_player.load_stream(url)` + `set_pause(False)`, and calls
 `meta_worker.set_active_station(station)` so the scraper switches provider and polls immediately.
@@ -567,13 +664,14 @@ triggers the tuning glitch, calls `stream_player.load_stream(url)` + `set_pause(
 ### `stations.json`
 
 `~/.config/termbeat/stations.json` (or `$XDG_CONFIG_HOME/termbeat/…`). A JSON array of objects.
-Written with the defaults on first run. Reloaded live when the mtime changes.
+Written with the defaults on first run. It is re-read, if its mtime has changed, when you open the
+station list (`L`), and always right after the add-station form saves; it is not watched otherwise.
 
-Every entry is passed through `normalize_station` (`radio.py:304`):
+Every entry is passed through `normalize_station` (`radio.py:310`):
 
 - **must** have a `url` with an `http`/`https` scheme — anything else (including `file://`) is
   rejected and logged, so a config file cannot make mpv open an arbitrary local path;
-- missing keys are filled from `STATION_DEFAULTS` (`radio.py:295`), so the renderers — which index
+- missing keys are filled from `STATION_DEFAULTS` (`radio.py:296`), so the renderers — which index
   `station["genre"]`, `station["track"]`, etc. directly — cannot raise `KeyError` on a hand-edited
   file;
 - text fields are coerced to `str`.
@@ -583,6 +681,37 @@ Every entry is passed through `normalize_station` (`radio.py:304`):
 Recognised keys: `id`, `station`, `freq`, `url`, `bitrate`, `genre`, `signal`, `track`, `provider`
 (`somafm` | `plaza` | `radioparadise` | `kexp` | `generic`). `provider` may be omitted — it is
 inferred from the URL host by `MetadataScraper.provider_of`.
+
+### Adding a station from the app
+
+`A` opens a form (`open_station_editor`, `radio.py:1911`) drawn by `render_station_editor`
+(`radio.py:2667`). It replaces the whole frame in every design style, because some styles' panels
+are only 4–5 rows tall. Its fields are `EDITOR_FIELDS` (`radio.py:306`): name, stream URL, freq,
+genre, bitrate and provider. The provider cycles through `auto`, `somafm`, `plaza`,
+`radioparadise`, `kexp` and `generic`; `auto` leaves it out and lets `provider_of` infer it.
+
+- **Keys.** While the form is open, `handle_key` sends every key to `_editor_key`
+  (`radio.py:1917`), so letters and digits type rather than act. `Enter` saves. `Ctrl-S` is
+  deliberately not used: cbreak mode keeps XON/XOFF, so the terminal would freeze output instead of
+  passing the key on. `run()` also lifts the per-frame key cap (`MAX_KEYS_PER_FRAME`) while the form
+  is open, so a pasted URL arrives whole.
+- **Validation** (`_editor_problem`). A name is required, and the URL must be `http`/`https` with a
+  host (the rule `normalize_station` applies). A URL already in the list is refused. The reason shows
+  under the form as you type.
+- **Saving** (`_save_new_station`, `radio.py:1991`) is append-only.
+  - The file is read back as it is on disk and the new entry is appended.
+  - The whole list is written to a temporary file, which replaces `stations.json` atomically and
+    keeps the original file mode. Existing entries keep their content, though the file is
+    re-indented.
+  - If the file doesn't parse as a list, nothing is written, since it may be one you are half-way
+    through editing.
+  - If the file doesn't exist, the defaults are written with the new entry, as on first run.
+- **The entry** holds only what was filled in, plus an `id`. For a SomaFM stream the `id` is the
+  channel from the URL path (`/groovesalad-128-mp3` → `groovesalad`), because the now-playing poller
+  looks SomaFM titles up by channel id. Any other station gets a unique slug of its name.
+- **Afterwards** the list is reloaded with `check_reload_stations(force=True)`, which skips the mtime
+  comparison so a coarse filesystem clock can't hide the write. Then the player tunes to the new
+  station.
 
 ### Environment variables
 
@@ -610,7 +739,7 @@ open the log is non-fatal (`NullHandler`), so the app runs on a read-only home d
 
 ## 12. Lifecycle and signal handling
 
-### Startup order (`TermbeatPlayer.__init__`, `radio.py:1460`)
+### Startup order (`TermbeatPlayer.__init__`, `radio.py:1666`)
 
 1. Plain state fields, `t0 = time.monotonic()`.
 2. `CavaStreamEngine(...)` — spawns cava + reader thread if `cava` is on `PATH`.
@@ -618,13 +747,13 @@ open the log is non-fatal (`NullHandler`), so the app runs on a read-only home d
 4. `MetadataScraper(PLAYLIST).start()`.
 5. If playing: `load_stream(url)` and `set_active_station(station)`.
 
-`main()` (`radio.py:3130`) then installs signal handlers and calls `app.run()`.
+`main()` (`radio.py:3773`) then installs signal handlers and calls `app.run()`.
 
 ### Shutdown
 
 `stop_app` (set as the `SIGINT`/`SIGTERM`/`SIGHUP` handler) just sets `self.running = False`; the
 loop falls out of `while self.running` and its `finally:` calls `cleanup()`. `cleanup()`
-(`radio.py:3112`) is idempotent (`_cleaned_up` guard) and:
+(`radio.py:3755`) is idempotent (`_cleaned_up` guard) and:
 
 1. stops the cava engine, the metadata worker, and the stream player (each wrapped so one failure
    doesn't block the others);
@@ -725,6 +854,25 @@ Output bytes per frame at 101×54, Retro/Spectrum, in motion: full repaint **602
 `_measure` micro-benchmark (v2 → v3): 1.19× (80×24) to 1.58× (Modern Neo Braille 101×54) faster on
 the measure path; whole-frame effect is small because measurement is no longer dominant.
 
+**TIDE**, added after the fix pass. From `bench/benchmark_render.py` on 2026-09-11: playing,
+simulated spectrum, the default station Groove Salad. p50 is physics plus render, as in the table
+above.
+
+| Geometry | p50 | CPU @ 22 FPS | max FPS | Row-diff output | Rows changed |
+| :-- | --: | --: | --: | --: | --: |
+| 80×24 | 0.29 ms | 0.5 % | 4,560 | 32 KB/s | 7.4 % |
+| 102×30 | 0.51 ms | 1.0 % | 2,335 | 49 KB/s | 8.2 % |
+| 101×54 | 0.51 ms | 1.0 % | 2,211 | 60 KB/s | 5.6 % |
+| 200×60 | 1.40 ms | 3.0 % | 742 | 147 KB/s | 9.2 % |
+
+TIDE is the most expensive style to render; at 200×60 it is the benchmark's worst config. Most of
+its time is `Pix.to_rows` and the per-pixel `colour_fn` calls from `draw_word`. Its output after
+damage tracking is in the same range as the other styles, because only the rows a flood line crosses
+change between frames. It is the lowest of all at 101×54 (the others send 88–177 KB/s there) and
+mid-range at 200×60 (the others send 100–184 KB/s). Separate render-only measurements put a paused
+frame at 0.02 ms with nothing sent, because 93% of paused frames reuse the cached rows, and a
+tuning-static frame at 0.83 ms at 132×44.
+
 ### 13.5 Context
 
 | App | Stack | RSS | Idle CPU |
@@ -740,11 +888,30 @@ subprocesses — not rewriting the renderer — is where a large footprint reduc
 
 ### 13.6 Test suite
 
-`python3 tests/test_termbeat.py` — **16 checks, all passing**: width parity vs the legacy algorithm,
-multi-key parsing, split-escape survival, config validation, cell-exact marquee for CJK titles,
-every layout fits its terminal (6 geometries × 4 styles × 2 visualizers × drawer), the diff renderer
-paints the same screen as a full repaint, diff byte savings, cava suspend/resume, and honest
-dead-stream behaviour (error badge, collapsed visualizer, frozen timer).
+`python3 tests/test_termbeat.py` — **29 checks, all passing, ~1 s**:
+
+- **Basics.** Width parity with the legacy algorithm, multi-key parsing, split-escape survival,
+  config validation, a cell-exact marquee for CJK titles, and every layout fitting its terminal
+  (6 geometries × 5 styles × 2 visualizers × drawer).
+- **TIDE.**
+  - It is exactly `rows × cols` in every theme, size, station and state, drawer and tuning static
+    included.
+  - It puts all 18 bands on screen, in horizontal order on every line.
+  - It keeps the name drawn but unflooded in silence.
+  - It sends nothing while paused.
+- **Drawer and hint bar.** The drawer keeps its selection on screen in every style, and every chassis
+  style shows `[A] Add` in an uncut hint bar.
+- **The add-station form**, run against a temporary config directory rather than yours.
+  - It owns the keyboard and cancels cleanly.
+  - It edits text as expected.
+  - It rejects a blank name, a non-http URL and a duplicate.
+  - It appends exactly one entry and tunes to it.
+  - It gives SomaFM streams their channel id.
+  - It refuses to overwrite a `stations.json` that doesn't parse.
+  - It fills exactly `rows × cols`.
+- **Rendering and state.** The diff renderer paints the same screen as a full repaint, diff byte
+  savings, cava suspend/resume, and honest dead-stream behaviour (error badge, collapsed visualizer,
+  frozen timer).
 
 ---
 
@@ -771,8 +938,8 @@ dead-stream behaviour (error badge, collapsed visualizer, frozen timer).
 - **`ETag` revalidation is inert today** — none of the four metadata APIs send `ETag`. The code path
   is correct and free; it will start saving bytes if any of them adds one. Keep-alive is the actual
   current win.
-- **Single file, single class.** `TermbeatPlayer` is ~1,700 lines and owns state, input, physics,
-  four renderers, and lifecycle. The four renderers still share ~70% of their structure by
+- **Single file, single class.** `TermbeatPlayer` is ~1,900 lines and owns state, input, physics,
+  five renderers, and lifecycle. The four chassis renderers still share ~70% of their structure by
   convention, not by a common layout engine. This was left deliberately untouched by the fix pass to
   keep the diff reviewable; splitting into a package is a separate task — see
 [`../rs/improvement-ideas.md`](../rs/improvement-ideas.md).
@@ -783,13 +950,21 @@ dead-stream behaviour (error badge, collapsed visualizer, frozen timer).
   (streams are live).
 - **RSS regression** (+5.7 MB against the pre-fix version) is accepted in exchange for logging,
   child reaping, and the IPC fix — see [`history.md` §3](history.md#3-what-the-fix-pass-cost).
+- **TIDE under `TERMBEAT_AMBIGUOUS_WIDTH=2`.** `▀` is an East-Asian Ambiguous glyph, so in that mode
+  it counts as 2 cells and `fit_row` truncates the type block. The rest of the chassis degrades the
+  same way.
+- **The Studio Tower drawer is invisible.** Retro Hi-Fi's tall layout always shows its own full
+  directory, with no selection marker, and never draws the drawer; `L` still opens it there, and it
+  captures `↑`/`↓`/`Enter`.
+- **The add-station form only adds.** Editing or removing a station still means editing
+  `stations.json` by hand, and a save re-indents the file; entries keep their content.
 
 ---
 
 ## 16. Development: tests, benchmarks, extending
 
 ```sh
-python3 tests/test_termbeat.py          # 16 checks, ~5 s, no network, no subprocesses
+python3 tests/test_termbeat.py          # 29 checks, ~1 s, no network, no subprocesses
 python3 bench/benchmark_render.py       # isolated render path, all styles × geometries
 python3 bench/benchmark_render.py --paused
 python3 bench/benchmark_render.py --cava-live
@@ -803,7 +978,9 @@ and `cava`.
 
 ### Adding a station
 
-Edit `~/.config/termbeat/stations.json` — the running app reloads it. Minimum entry:
+Press `A` in the app ([§11](#adding-a-station-from-the-app)), or edit
+`~/.config/termbeat/stations.json` directly. The running app picks the file up the next time you
+open the station list (`L`). Minimum entry:
 
 ```json
 { "station": "My Stream", "url": "https://example.com/stream.mp3", "freq": "95.5", "genre": "TEST" }
@@ -814,14 +991,17 @@ off (or `"generic"`) to fall back to mpv's ICY `media-title`.
 
 ### Adding a theme
 
-Append a dict to `THEMES` (`radio.py:355`) with the same keys as the others. The `_c_*` escape
-strings are derived automatically by the loop right after the list.
+Append a dict to `THEMES` (`radio.py:361`) with the same keys as the others. The `_c_*` escape
+strings are derived automatically by the loop right after the list. TIDE builds its letter gradient
+from `accent` → `lcd_bright` in RGB, so check how that pair blends: a far-apart pair passes through a
+greyish or greenish midpoint.
 
 ### Adding a design style
 
 Add a `render_<name>` method, extend `design_names`, and add a branch to `render_frame`
-(`radio.py:2478`). It must return a `list[str]` of rows each exactly `cols` cells wide (use
-`fit_row`); `run()` clamps to `rows` and `emit_frame` handles the rest.
+(`radio.py:2883`). It must return a `list[str]` of rows each exactly `cols` cells wide (use
+`fit_row`); `run()` clamps to `rows` and `emit_frame` handles the rest. `render_tide` is the most
+recent example.
 
 ### Prototyping before you wire anything in
 
@@ -843,26 +1023,30 @@ The idea each one comes from is catalogued in [`designs/README.md`](../designs/R
 
 | Lines | Symbol | Role |
 | --: | :-- | :-- |
-| 52–107 | `_init_logger`, `_die_with_parent`, `_runtime_dir` | infra: file log, `PR_SET_PDEATHSIG`, per-user runtime dir |
-| 109–288 | `DEFAULT_PLAYLIST` | 16 preset stations |
-| 289–353 | `normalize_station`, `normalize_playlist`, `load_stations_config` | config loading + validation |
-| 355–422 | `THEMES` (+ derived `_c_*`) | 5 colour themes |
-| 424–472 | `fg`, `bg`, `RST`, `C_*`, `CYBER_*`, pacing constants, `BLOCKS` | colour + timing primitives |
-| 474–590 | `str_width`, `char_width`, `_measure`, `cell_slots`, `truncate_ansi`, `fit_row` | width measurement + row fitting |
-| 593–758 | `_CSI_KEYS`, `parse_key_bytes`, `RawInput` | input |
-| 760–1044 | `StreamPlayer` | mpv subprocess + IPC + supervision + `health()` |
-| 1047–1120 | `HttpSession` | keep-alive JSON client |
-| 1122–1326 | `MetadataScraper` | provider-scoped now-playing polling |
-| 1328–1456 | `CavaStreamEngine` | cava subprocess + spectrum pipe + suspend |
-| 1459–1543 | `TermbeatPlayer.__init__` | all mutable state |
-| 1546–1728 | badges, `_tune`, track nav, `toggle_*`, `check_reload_stations` | commands |
-| 1730–1880 | `apply_monstercat_filter`, `update_physics` | per-frame simulation |
-| 1882–2164 | `get_*_rows` | visualizer rasterisers |
-| 2166–2327 | `render_button`, `render_transport_bar`, `render_status_bar`, `render_drawer_rows` | shared sub-renderers |
-| 2329–2417 | `handle_key`, `adjust_volume`, `emit_frame` | dispatch + damage-tracked output |
-| 2419–2476 | `run` | the main loop |
-| 2478–3110 | `render_frame` + `render_retro_hifi` / `_modern_neo` / `_minimal_zen` / `_cyberpunk` | the four full-frame renderers |
-| 3112–3155 | `cleanup`, `main` | shutdown + signal wiring |
+| 53–108 | `_init_logger`, `_die_with_parent`, `_runtime_dir` | infra: file log, `PR_SET_PDEATHSIG`, per-user runtime dir |
+| 110–289 | `DEFAULT_PLAYLIST` | 16 preset stations |
+| 290–359 | `normalize_station`, `normalize_playlist`, `load_stations_config`, `EDITOR_FIELDS` | config loading + validation, the add-station form's fields |
+| 361–479 | `THEMES` (+ derived `_c_*`) | 9 colour themes |
+| 482–530 | `fg`, `bg`, `RST`, `C_*`, `CYBER_*`, pacing constants, `BLOCKS` | colour + timing primitives |
+| 532–585 | `FONT_5X7`, `_FONT_BITS`, `TIDE_EXPAND` | TIDE's bitmap font and band stretch |
+| 587–700 | `str_width`, `char_width`, `_measure`, `cell_slots`, `truncate_ansi`, `fit_row` | width measurement + row fitting |
+| 703–792 | `_FG_SGR` / `_BG_SGR`, `_lerp3`, `Pix`, `draw_word` | TIDE's half-pixel raster |
+| 798–964 | `_CSI_KEYS`, `parse_key_bytes`, `RawInput` | input |
+| 966–1250 | `StreamPlayer` | mpv subprocess + IPC + supervision + `health()` |
+| 1253–1326 | `HttpSession` | keep-alive JSON client |
+| 1328–1532 | `MetadataScraper` | provider-scoped now-playing polling |
+| 1534–1662 | `CavaStreamEngine` | cava subprocess + spectrum pipe + suspend |
+| 1665–1753 | `TermbeatPlayer.__init__` | all mutable state |
+| 1756–2067 | badges, `_tune`, track nav, `toggle_*`, `check_reload_stations`, `open_station_editor`, `_editor_key`, `_editor_problem`, `_editor_entry`, `_save_new_station` | commands, including the add-station form's logic |
+| 2069–2219 | `apply_monstercat_filter`, `update_physics` | per-frame simulation |
+| 2221–2503 | `get_*_rows` | visualizer rasterisers |
+| 2505–2724 | `render_button`, `render_transport_bar`, `render_status_bar`, `render_drawer_rows`, `render_station_editor` | shared sub-renderers + the add-station form |
+| 2726–2818 | `handle_key`, `adjust_volume`, `emit_frame` | dispatch + damage-tracked output |
+| 2820–2881 | `run` | the main loop |
+| 2883–2982 | `render_frame`, `_tide_layout` | style dispatch + TIDE's fitting pass |
+| 2984–3608 | `render_retro_hifi` / `_modern_neo` / `_minimal_zen` / `_cyberpunk` | the four chassis renderers |
+| 3610–3753 | `_tide_type_rows`, `render_tide` | the TIDE renderer |
+| 3755–3798 | `cleanup`, `main` | shutdown + signal wiring |
 
 ---
 
