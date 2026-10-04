@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>termbeat stations</title>
+<link rel="icon" href="icons/icon-32.png">
+<link rel="stylesheet" href="popup.css">
+<style>
+  body { width: auto; max-width: 720px; margin: 24px auto; padding: 0 16px; }
+  h1 { font-size: 16px; color: var(--accent); margin: 0 0 4px; }
+  h2 { font-size: 13px; color: #fff; margin: 20px 0 8px; }
+  p { margin: 4px 0; }
+  .panel { border: 1px solid var(--frame); border-radius: 8px; padding: 12px 14px; background: var(--deck); }
+  form { display: grid; grid-template-columns: 9ch 1fr; gap: 8px 10px; align-items: center; }
+  input, select { font: inherit; color: var(--text); background: var(--lcd); border: 1px solid var(--lcd-border);
+    border-radius: 4px; padding: 5px 6px; width: 100%; }
+  select { margin: 0; width: 100%; }
+  label { color: var(--accent); }
+  .actions { grid-column: 2; display: flex; gap: 8px; align-items: center; }
+  #error { color: var(--error); }
+  #saved { color: var(--bright); }
+  ul { list-style: none; margin: 0; padding: 0; }
+  li { display: flex; gap: 10px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--title-bg); }
+  li .name { color: var(--bright); min-width: 18ch; }
+  li .url { color: var(--dim); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .muted { color: rgb(143, 166, 196); }
+  @media (max-width: 480px) { form { grid-template-columns: 1fr; } .actions { grid-column: 1; } }
+</style>
+</head>
+<body>
+<h1>♫ termbeat stations</h1>
+<p class="muted">The 16 built-in stations are always there. Stations you add here sync across your browsers
+and appear in the player's directory and the popup.</p>
+
+<h2>Add a station</h2>
+<div class="panel">
+  <form id="add" autocomplete="off">
+    <label for="name">Name</label><input id="name" required placeholder="My Station">
+    <label for="url">Stream</label><input id="url" required placeholder="https://example.com/stream.mp3">
+    <label for="freq">Freq</label><input id="freq" placeholder="99.9">
+    <label for="genre">Genre</label><input id="genre" placeholder="JAZZ">
+    <label for="bitrate">Bitrate</label><input id="bitrate" placeholder="128kbps">
+    <label for="provider">Metadata</label>
+    <select id="provider">
+      <option value="auto">auto (guess from the URL)</option>
+      <option value="somafm">SomaFM</option>
+      <option value="plaza">Nightwave Plaza</option>
+      <option value="radioparadise">Radio Paradise</option>
+      <option value="kexp">KEXP</option>
+      <option value="generic">none</option>
+    </select>
+    <div class="actions">
+      <button class="primary" type="submit">Add station</button>
+      <span id="error" role="alert"></span><span id="saved" role="status"></span>
+    </div>
+  </form>
+  <p class="muted" style="margin-top:10px">After adding, your browser may ask to let termbeat read that site. Allowing it
+  gives the station a real spectrum; without it the station still plays and the spectrum is simulated.</p>
+</div>
+
+<h2>Your stations</h2>
+<div class="panel"><ul id="list"></ul><p id="empty" class="muted">None yet.</p></div>
+<script type="module" src="options.js"></script>
+</body>
+</html>

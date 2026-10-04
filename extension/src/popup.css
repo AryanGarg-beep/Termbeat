@@ -1,0 +1,49 @@
+:root {
+  --frame: rgb(70, 95, 145); --title-bg: rgb(24, 42, 82); --deck: rgb(18, 26, 48);
+  --lcd: rgb(6, 20, 12); --lcd-border: rgb(32, 75, 48); --dim: rgb(38, 115, 55);
+  --bright: rgb(55, 255, 95); --accent: rgb(0, 220, 255); --warn: rgb(255, 210, 40);
+  --error: rgb(255, 105, 105); --text: rgb(175, 200, 235);
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; width: 320px; background: var(--deck); color: var(--text);
+  font: 12px/1.35 "JetBrains Mono", "Cascadia Mono", "DejaVu Sans Mono", Menlo, Consolas, monospace;
+}
+.deck { border: 1px solid var(--frame); border-radius: 8px; margin: 6px; overflow: hidden; }
+header {
+  display: flex; justify-content: space-between; align-items: center;
+  background: var(--title-bg); padding: 6px 10px; border-bottom: 1px solid var(--frame);
+}
+.logo { color: var(--accent); } .logo b { color: #fff; }
+.badge { font-weight: 700; color: var(--warn); }
+.badge.play { color: var(--bright); } .badge.err { color: var(--error); }
+.lcd {
+  margin: 8px; padding: 6px 8px 8px; background: var(--lcd);
+  border: 1px solid var(--lcd-border); border-radius: 6px;
+}
+#bars { display: block; width: 100%; height: 56px; }
+.station { color: var(--accent); font-weight: 700; margin-top: 6px; text-transform: uppercase;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.track { color: var(--bright); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.time { color: var(--dim); }
+.transport { display: flex; gap: 6px; justify-content: center; padding: 0 8px; }
+button {
+  font: inherit; color: var(--text); background: transparent; cursor: pointer;
+  border: 1px solid var(--frame); border-radius: 4px; padding: 4px 10px;
+}
+button:hover { color: var(--accent); border-color: var(--accent); }
+button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+button:active { background: var(--warn); color: rgb(10, 20, 30); }
+.transport button { min-width: 52px; font-size: 14px; }
+#play.on { color: var(--accent); border-color: var(--accent); }
+.vol { display: flex; align-items: center; gap: 8px; padding: 8px 10px 4px; }
+.vol input { flex: 1; accent-color: var(--accent); }
+#mute.on { color: var(--error); border-color: var(--error); }
+#volnum { width: 4ch; text-align: right; color: var(--accent); }
+select {
+  display: block; width: calc(100% - 20px); margin: 4px 10px 8px; font: inherit;
+  color: var(--text); background: var(--lcd); border: 1px solid var(--lcd-border); border-radius: 4px; padding: 4px;
+}
+footer { display: flex; gap: 6px; padding: 8px 10px; border-top: 1px solid var(--frame); background: var(--title-bg); }
+footer .primary { flex: 1; color: var(--accent); border-color: var(--accent); }

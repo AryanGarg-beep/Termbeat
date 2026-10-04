@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>termbeat</title>
+<link rel="stylesheet" href="popup.css">
+</head>
+<body>
+<main class="deck">
+  <header>
+    <span class="logo">♫ <b>termbeat</b></span>
+    <span id="badge" class="badge">◌ CONNECTING</span>
+  </header>
+  <section class="lcd">
+    <canvas id="bars" width="288" height="56" aria-hidden="true"></canvas>
+    <div id="station" class="station">—</div>
+    <div id="track" class="track">&nbsp;</div>
+    <div id="time" class="time">&nbsp;</div>
+  </section>
+  <nav class="transport" aria-label="Playback">
+    <button id="prev" title="Previous station (P)" aria-label="Previous station">◀</button>
+    <button id="play" title="Play / pause (Space)" aria-label="Play or pause">▶</button>
+    <button id="stop" title="Stop (S)" aria-label="Stop">■</button>
+    <button id="next" title="Next station (N)" aria-label="Next station">▶</button>
+  </nav>
+  <label class="vol">
+    <button id="mute" title="Mute (M)" aria-label="Mute">VOL</button>
+    <input id="volume" type="range" min="0" max="100" step="1" aria-label="Volume">
+    <span id="volnum">75%</span>
+  </label>
+  <select id="stations" aria-label="Station"></select>
+  <footer>
+    <button id="open" class="primary">Open full player</button>
+    <button id="options" title="Add or remove your own stations">Stations…</button>
+  </footer>
+</main>
+<script type="module" src="popup.js"></script>
+</body>
+</html>

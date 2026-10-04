@@ -1,0 +1,36 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "termbeat"
+dynamic = ["version"]
+description = "A retro hi-fi internet-radio player that runs entirely in a terminal"
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [{ name = "Aryan Garg" }]
+keywords = ["radio", "terminal", "tui", "music", "internet-radio", "mpv"]
+classifiers = [
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Topic :: Multimedia :: Sound/Audio :: Players",
+]
+
+[project.urls]
+Homepage = "https://github.com/AryanGarg-beep/Termbeat"
+
+[project.scripts]
+termbeat = "termbeat.app:main"
+
+[tool.hatch.version]
+path = "termbeat/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["termbeat"]
+
+[tool.hatch.build.targets.sdist]
+include = ["termbeat/", "tests/", "README.md", "pyproject.toml"]

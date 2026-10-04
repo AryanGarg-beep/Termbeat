@@ -1,0 +1,27 @@
+name: extension
+
+on:
+  push:
+    tags: ["ext-v*"]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: node extension/tests/test_extension.js
+      - run: python tools/build_extension.py
+      - run: npx --yes web-ext lint --source-dir build/extension/firefox
+      # Store-ready zips: upload termbeat-chrome-*.zip to the Chrome Web Store and
+      # Edge Add-ons, and termbeat-firefox-*.zip to addons.mozilla.org.
+      - run: gh release create "$GITHUB_REF_NAME" dist/termbeat-*.zip --repo "$GITHUB_REPOSITORY" --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}

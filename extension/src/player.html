@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>termbeat</title>
+<link rel="icon" href="icons/icon-32.png">
+<style>
+  html, body { margin: 0; height: 100%; background: #070a10; overflow: hidden; }
+  canvas { display: block; }
+  #toast {
+    position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
+    font: 13px/1.4 "JetBrains Mono", "DejaVu Sans Mono", monospace; color: #cfe3ff;
+    background: rgba(24, 42, 82, .92); border: 1px solid #465f91; border-radius: 6px;
+    padding: 6px 12px; opacity: 0; transition: opacity .25s; pointer-events: none;
+  }
+  #toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+<canvas id="screen" tabindex="0" aria-label="termbeat radio deck. Space plays or pauses, N and P change station, L opens the station list, Q quits."></canvas>
+<div id="toast" role="status"></div>
+<script type="module" src="player.js"></script>
+</body>
+</html>
