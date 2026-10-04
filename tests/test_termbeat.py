@@ -9,6 +9,7 @@ import importlib.util
 import os
 import re
 import sys
+import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -470,6 +471,9 @@ def test_windows_portability():
               "an explicit XDG variable still wins on Windows")
         tb.IS_WINDOWS = False
         os.environ.pop("XDG_CONFIG_HOME")
+        # a runtime dir keeps the simulated POSIX path off os.getuid, which a
+        # real Windows host running this test doesn't have
+        os.environ["XDG_RUNTIME_DIR"] = tempfile.gettempdir()
         check(tb._user_dir("XDG_CONFIG_HOME", "~/.config", "APPDATA")
               == os.path.expanduser("~/.config"), "POSIX ignores %APPDATA%")
         check(tb.ipc_path(42).endswith("mpv-42.sock"), "POSIX mpv IPC is a UNIX socket")
